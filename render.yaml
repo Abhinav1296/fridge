@@ -1,0 +1,33 @@
+# Render Blueprint — deploys SmartFridge Vision as a web service with a persistent
+# disk, so the SQLite history/inventory database survives restarts and redeploys.
+#
+# NOTE: a persistent disk requires a PAID instance type (Starter or higher). Render's
+# free tier does not support disks. A service with a disk runs as a single instance.
+services:
+  - type: web
+    name: fridge
+    runtime: python
+    plan: starter                     # required for the disk below (free tier has no disks)
+    region: oregon                    # change to a region near you if you prefer
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+    autoDeploy: true                  # redeploy automatically on every push to the repo
+    disk:
+      name: fridge-data
+      mountPath: /var/data            # DATABASE_PATH below points at this persistent volume
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      # Store the history DB on the persistent disk so it isn't wiped on redeploy/restart.
+      - key: DATABASE_PATH
+        value: /var/data/smartfridge.db
+      # Your vision provider key — left blank on purpose; enter it in the Render dashboard
+      # (Environment tab). It is never committed to the repo.
+      - key: VISION_API_KEY
+        sync: false
+      # Defaults target OpenRouter's free tier — edit these to match your local .env.
+      - key: VISION_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: VISION_MODEL
+        value: inclusionai/ling-3.0-flash-vl:free
