@@ -88,12 +88,26 @@ def _turso_url() -> str:
     return os.getenv("TURSO_DATABASE_URL", "").strip()
 
 
+def _remote_url(url: str) -> str:
+    """Normalize a Turso URL to the HTTP transport.
+
+    Turso hands out ``libsql://<host>`` URLs. The client would treat that scheme as a
+    WebSocket connection (``wss://``), but we want the **HTTP transport** instead: it is
+    the right fit for serverless hosts like Vercel (no long-lived socket) and avoids the
+    Hrana-over-WebSocket handshake. So ``libsql://`` is rewritten to ``https://``; any
+    explicit ``http(s)://`` the user provides is left untouched.
+    """
+    if url.startswith("libsql://"):
+        return "https://" + url[len("libsql://"):]
+    return url
+
+
 def _make_client() -> libsql_client.ClientSync:
     """Create a libSQL client for the configured target (remote Turso or local file)."""
     url = _turso_url()
     if url:
         token = os.getenv("TURSO_AUTH_TOKEN", "").strip() or None
-        return libsql_client.create_client_sync(url, auth_token=token)
+        return libsql_client.create_client_sync(_remote_url(url), auth_token=token)
     # Local file mode: libsql wants a forward-slashed ``file:`` URL, absolute so it doesn't
     # depend on the process's working directory.
     file_url = "file:" + os.path.abspath(_db_path()).replace("\\", "/")
@@ -157,45 +171,51 @@ def save_scan(
     unidentified = result.get("unidentified") or []
     when = (created_at or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    with _connect() as client:
-        # One interactive transaction so a scan and its rows are written atomically.
-        tx = client.transaction()
-        try:
-            head = tx.execute(
-                "INSERT INTO scans (created_at, source, item_count) VALUES (?, ?, ?)",
-                [when, source, len(items)],
+    # Write the scan and all its rows as one atomic batch. We use batch() rather than an
+    # interactive transaction because the HTTP transport used on serverless hosts (Turso)
+    # doesn't support interactive transactions — but batch() is atomic on both HTTP and the
+    # local file (a failing statement rolls the whole batch back).
+    #
+    # The child rows can't know the scan's auto-generated id ahead of time, so they resolve
+    # it with ``(SELECT MAX(id) FROM scans)``. Inside the batch's single transaction libSQL
+    # serializes writers, so that is exactly the scan just inserted above.
+    statements: list[tuple[str, list[Any]]] = [
+        (
+            "INSERT INTO scans (created_at, source, item_count) VALUES (?, ?, ?)",
+            [when, source, len(items)],
+        )
+    ]
+    for item in items:
+        statements.append(
+            (
+                "INSERT INTO items "
+                "(scan_id, name, count, category, freshness, freshness_confidence, notes) "
+                "VALUES ((SELECT MAX(id) FROM scans), ?, ?, ?, ?, ?, ?)",
+                [
+                    str(item.get("name", "")),
+                    _as_int(item.get("count"), default=1),
+                    _as_opt_str(item.get("category")),
+                    _as_opt_str(item.get("freshness")),
+                    _as_opt_str(item.get("freshness_confidence")),
+                    _as_opt_str(item.get("notes")),
+                ],
             )
-            scan_id = int(head.last_insert_rowid)
+        )
+    for entry in unidentified:
+        statements.append(
+            (
+                "INSERT INTO unidentified (scan_id, description, reason) "
+                "VALUES ((SELECT MAX(id) FROM scans), ?, ?)",
+                [
+                    _as_opt_str(entry.get("description")),
+                    _as_opt_str(entry.get("reason")),
+                ],
+            )
+        )
 
-            for item in items:
-                tx.execute(
-                    "INSERT INTO items "
-                    "(scan_id, name, count, category, freshness, freshness_confidence, notes) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [
-                        scan_id,
-                        str(item.get("name", "")),
-                        _as_int(item.get("count"), default=1),
-                        _as_opt_str(item.get("category")),
-                        _as_opt_str(item.get("freshness")),
-                        _as_opt_str(item.get("freshness_confidence")),
-                        _as_opt_str(item.get("notes")),
-                    ],
-                )
-
-            for entry in unidentified:
-                tx.execute(
-                    "INSERT INTO unidentified (scan_id, description, reason) VALUES (?, ?, ?)",
-                    [
-                        scan_id,
-                        _as_opt_str(entry.get("description")),
-                        _as_opt_str(entry.get("reason")),
-                    ],
-                )
-            tx.commit()
-        except Exception:
-            tx.rollback()
-            raise
+    with _connect() as client:
+        results = client.batch(statements)
+        scan_id = int(results[0].last_insert_rowid)
 
     logger.info("Saved scan %d (source=%s, %d items)", scan_id, source, len(items))
     return scan_id
