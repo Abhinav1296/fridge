@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartFridge Vision</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>" />
+</head>
+<body>
+  <header class="site-header">
+    <h1>🧊 SmartFridge Vision</h1>
+    <p class="tagline">Snap or upload a photo of your fridge — get a structured inventory with freshness.</p>
+  </header>
+
+  <main class="container">
+    <!-- Input source tabs -->
+    <section class="panel" aria-label="Image source">
+      <div class="tabs" role="tablist">
+        <button id="tab-fridge" class="tab active" role="tab" aria-selected="true" aria-controls="panel-fridge">
+          My Fridge
+        </button>
+        <button id="tab-upload" class="tab" role="tab" aria-selected="false" aria-controls="panel-upload">
+          Upload
+        </button>
+        <button id="tab-webcam" class="tab" role="tab" aria-selected="false" aria-controls="panel-webcam">
+          Webcam
+        </button>
+        <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">
+          History
+        </button>
+      </div>
+
+      <!-- Fridge panel: the current inventory (most recent scan) -->
+      <div id="panel-fridge" class="tab-panel" role="tabpanel" aria-labelledby="tab-fridge">
+        <div class="fridge-head">
+          <p id="fridge-asof" class="muted small">Your most recent scan is your current inventory.</p>
+          <button id="refresh-fridge" class="btn btn-secondary" type="button">Refresh</button>
+        </div>
+        <div id="fridge-loading" class="loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading your fridge…</span>
+        </div>
+        <div id="fridge-empty" class="fridge-empty" hidden>
+          <p class="muted">Nothing here yet — scan your fridge and its contents show up here as your live inventory.</p>
+          <button id="fridge-scan-cta" class="btn btn-primary" type="button">📷 Scan your fridge</button>
+        </div>
+        <p id="fridge-error" class="error-banner" role="alert" hidden></p>
+        <div id="fridge-body" hidden>
+          <div id="fridge-summary" class="fridge-summary"></div>
+          <div id="fridge-callout" class="fridge-callout" hidden></div>
+          <button id="fridge-toggle" class="scan-toggle fridge-toggle" type="button"
+                  aria-controls="fridge-groups" aria-expanded="true" hidden>Hide items ▴</button>
+          <div id="fridge-groups" class="fridge-groups"></div>
+          <p id="fridge-unidentified" class="muted small" hidden></p>
+        </div>
+      </div>
+
+      <!-- Upload panel -->
+      <div id="panel-upload" class="tab-panel" role="tabpanel" aria-labelledby="tab-upload" hidden>
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Drag and drop an image here, or click to choose a file">
+          <div class="dropzone-inner">
+            <span class="dropzone-icon">📷</span>
+            <p><strong>Drag &amp; drop</strong> an image here</p>
+            <p class="muted">or click to choose a file</p>
+          </div>
+          <input id="file-input" type="file" accept="image/*" hidden />
+        </div>
+      </div>
+
+      <!-- Webcam panel -->
+      <div id="panel-webcam" class="tab-panel" role="tabpanel" aria-labelledby="tab-webcam" hidden>
+        <div class="webcam-wrap">
+          <video id="video" playsinline autoplay muted></video>
+        </div>
+        <div class="webcam-controls">
+          <button id="start-camera" class="btn btn-secondary" type="button">Start camera</button>
+          <button id="capture" class="btn btn-secondary" type="button" disabled>Capture frame</button>
+        </div>
+        <p id="webcam-hint" class="muted small">Your browser will ask for camera permission. Nothing is recorded — a single frame is captured when you press Capture.</p>
+        <canvas id="canvas" hidden></canvas>
+      </div>
+
+      <!-- History panel -->
+      <div id="panel-history" class="tab-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
+        <div class="history-head">
+          <p class="muted small">Every analysis is saved here with the time it was taken.</p>
+          <button id="refresh-history" class="btn btn-secondary" type="button">Refresh</button>
+        </div>
+        <div id="history-loading" class="loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading history…</span>
+        </div>
+        <p id="history-empty" class="muted" hidden>No scans yet. Analyze an image and it'll show up here.</p>
+        <p id="history-error" class="error-banner" role="alert" hidden></p>
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </section>
+
+    <!-- Capture-flow output (preview, loading, error, results). Wrapped so tabs that
+         aren't Upload/Webcam can hide the whole flow at once while each part keeps its
+         own visibility. Hidden by default because the Fridge tab opens first. -->
+    <div id="capture-extras" class="contents" hidden>
+
+    <!-- Preview + analyze -->
+    <section id="preview-section" class="panel" aria-label="Preview" hidden>
+      <h2 class="section-title">Preview</h2>
+      <div class="preview-row">
+        <img id="preview" class="preview-img" alt="Selected image preview" />
+        <div class="preview-actions">
+          <button id="analyze" class="btn btn-primary" type="button">Analyze image</button>
+          <button id="clear" class="btn btn-ghost" type="button">Clear</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Loading -->
+    <div id="loading" class="loading" role="status" aria-live="polite" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Analyzing image…</span>
+    </div>
+
+    <!-- Error -->
+    <div id="error" class="error-banner" role="alert" hidden></div>
+
+    <!-- Results -->
+    <section id="results-section" class="results" aria-label="Inventory results" hidden>
+      <h2 class="section-title">Inventory <span id="item-count" class="count-pill"></span></h2>
+      <div id="cards" class="cards"></div>
+      <p id="no-items" class="muted" hidden>No food items were detected in this image.</p>
+
+      <div id="unidentified-section" hidden>
+        <h2 class="section-title">Needs your input</h2>
+        <p class="muted small">These items couldn't be identified from the photo. Later phases will let you resolve them — for now they're shown for reference.</p>
+        <div id="unidentified-cards" class="cards"></div>
+      </div>
+    </section>
+
+    </div><!-- /#capture-extras -->
+  </main>
+
+  <footer class="site-footer">
+    <p class="muted small">SmartFridge Vision · Phase 2 · Live inventory + scan history. Shopping lists and agents come next.</p>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

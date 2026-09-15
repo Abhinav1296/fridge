@@ -1,0 +1,518 @@
+/* SmartFridge Vision MVP — styles
+   Modern, responsive, mobile-first. Freshness is conveyed by colour AND text so it
+   remains legible to colour-blind users. */
+
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f0f3f6;
+  --text: #1c2733;
+  --text-muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-contrast: #ffffff;
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 8px 24px rgba(15, 23, 42, 0.06);
+
+  /* Freshness palette */
+  --fresh: #16a34a;
+  --fresh-bg: #dcfce7;
+  --ripe: #0d9488;
+  --ripe-bg: #ccfbf1;
+  --use-soon: #b45309;
+  --use-soon-bg: #fef3c7;
+  --spoiled: #dc2626;
+  --spoiled-bg: #fee2e2;
+  --unknown: #64748b;
+  --unknown-bg: #e2e8f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --surface-2: #273449;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --border: #334155;
+    --primary: #3b82f6;
+    --primary-hover: #60a5fa;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.3);
+
+    --fresh-bg: #14351f;
+    --ripe-bg: #0f3b34;
+    --use-soon-bg: #3d2f0c;
+    --spoiled-bg: #3d1414;
+    --unknown-bg: #2b3648;
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* The `hidden` attribute must win even over elements that set an explicit
+   `display` via a class (e.g. .loading / .results below) or `display: contents`. */
+[hidden] { display: none !important; }
+
+/* A layout-neutral wrapper: its children participate in the parent's flex/grid as if
+   the wrapper weren't there, yet the whole group can be hidden with one `hidden`. */
+.contents { display: contents; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.site-header {
+  text-align: center;
+  padding: 2rem 1rem 1rem;
+}
+.site-header h1 {
+  margin: 0;
+  font-size: 1.9rem;
+}
+.tagline {
+  margin: 0.4rem auto 0;
+  max-width: 34rem;
+  color: var(--text-muted);
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 1rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+
+.section-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* --- Tabs --- */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--surface-2);
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 1rem;
+}
+.tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.6rem 1rem;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+/* --- Dropzone --- */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2.5rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--primary);
+  background: var(--surface-2);
+  outline: none;
+}
+.dropzone.dragover {
+  border-color: var(--primary);
+  background: var(--surface-2);
+}
+.dropzone-inner p { margin: 0.2rem 0; }
+.dropzone-icon { font-size: 2.5rem; }
+
+/* --- Webcam --- */
+.webcam-wrap {
+  background: #000;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.webcam-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* --- Preview --- */
+.preview-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.preview-img {
+  max-width: 260px;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.preview-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 160px;
+}
+
+/* --- Buttons --- */
+.btn {
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.65rem 1.2rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s, border-color 0.15s;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-contrast);
+}
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border);
+}
+.btn-secondary:hover:not(:disabled) { border-color: var(--primary); }
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+.btn-ghost:hover:not(:disabled) { color: var(--text); }
+
+/* --- Loading --- */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1.25rem;
+  color: var(--text-muted);
+}
+.spinner {
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Error --- */
+.error-banner {
+  background: var(--spoiled-bg);
+  color: var(--spoiled);
+  border: 1px solid var(--spoiled);
+  border-radius: var(--radius-sm);
+  padding: 0.9rem 1.1rem;
+  font-weight: 500;
+}
+
+/* --- Results --- */
+.results { display: flex; flex-direction: column; gap: 1.5rem; }
+.count-pill {
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 0.9rem;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.card-name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.card-count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+.chip {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+.card-notes {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+/* Freshness badges */
+.badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  text-transform: capitalize;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.badge::before {
+  content: "";
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+.badge-fresh    { color: var(--fresh);    background: var(--fresh-bg); }
+.badge-ripe     { color: var(--ripe);     background: var(--ripe-bg); }
+.badge-use_soon { color: var(--use-soon); background: var(--use-soon-bg); }
+.badge-spoiled  { color: var(--spoiled);  background: var(--spoiled-bg); }
+.badge-unknown  { color: var(--unknown);  background: var(--unknown-bg); }
+
+.conf-low { opacity: 0.85; }
+
+/* --- Fridge (current inventory) --- */
+.fridge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.fridge-head p { margin: 0; }
+
+.fridge-empty {
+  text-align: center;
+  padding: 1.5rem 1rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+.fridge-empty p { max-width: 34rem; margin: 0; }
+
+.fridge-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 1rem;
+}
+.fridge-total {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+.fridge-freshness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* Prominent "use these first" nudge for spoiled / use-soon items. */
+.fridge-callout {
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  padding: 0.7rem 1rem;
+  font-weight: 600;
+  margin-bottom: 1.25rem;
+}
+.fridge-callout-soon {
+  background: var(--use-soon-bg);
+  color: var(--use-soon);
+  border-color: var(--use-soon);
+}
+.fridge-callout-spoiled {
+  background: var(--spoiled-bg);
+  color: var(--spoiled);
+  border-color: var(--spoiled);
+}
+
+/* Collapse toggle for the item list — sits between the callout and the groups. */
+.fridge-toggle { display: block; margin: 0.35rem 0 1rem; }
+.fridge-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.fridge-group-title {
+  text-transform: capitalize;
+  font-size: 1.05rem;
+}
+#fridge-unidentified { margin: 1.25rem 0 0; }
+
+/* --- History --- */
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.history-head p { margin: 0; }
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.scan-entry {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.scan-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.scan-when {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.scan-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+/* In history, badges label individual items — keep them compact and readable. */
+.scan-items .badge {
+  text-transform: none;
+  font-weight: 600;
+}
+.scan-unidentified { margin: 0; }
+
+/* Expandable "everything in this image" detail, grouped by category. */
+.scan-toggle {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0.15rem 0;
+  margin: 0;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scan-toggle:hover { text-decoration: underline; }
+.scan-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  margin-top: 0.2rem;
+  padding-top: 0.85rem;
+  border-top: 1px dashed var(--border);
+}
+.scan-detail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.scan-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+/* Detail cards sit on the entry's tinted surface — lighten them to keep contrast. */
+.scan-detail .card { background: var(--surface); }
+.scan-detail .count-pill { border: 1px solid var(--border); }
+
+/* --- Footer / misc --- */
+.site-footer {
+  text-align: center;
+  padding: 1.5rem 1rem 2.5rem;
+}
+.muted { color: var(--text-muted); }
+.small { font-size: 0.85rem; }
+
+@media (max-width: 520px) {
+  .site-header h1 { font-size: 1.5rem; }
+  .preview-img { max-width: 100%; }
+  .preview-actions { min-width: 100%; }
+}
