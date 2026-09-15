@@ -1,0 +1,12 @@
+# Keep local-only and generated files out of Vercel deployments.
+# (Vercel CLI does not read .gitignore, so mirror the important bits here.)
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Secrets + local databases never belong in a deploy bundle.
+.env
+*.db
+*.sqlite
+*.sqlite3

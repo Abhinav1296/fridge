@@ -2,4 +2,4 @@ Flask>=3.0,<4.0
 requests>=2.31,<3.0
 python-dotenv>=1.0,<2.0
 Pillow>=10.0,<12.0
-gunicorn>=21.2,<24.0  # production WSGI server (used on Render; not needed for local `flask run`)
+libsql-client>=0.3,<0.4  # SQLite-compatible client; talks to a local file in dev and to Turso in the cloud

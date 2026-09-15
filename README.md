@@ -271,20 +271,52 @@ breakdown of *everything detected in that particular image* — grouped by categ
 listed under "Needs your input". It's read from `GET /api/history` (metadata only — no
 photos are stored).
 
-The database is created automatically on first run. Its location is controlled by one
-optional variable in `.env`:
+Storage uses **libSQL** (a SQLite fork) through the `libsql-client` package, so the same
+code runs against either a local file in development or a hosted **Turso** database in the
+cloud. It's created automatically on first run. Which target is used is decided from the
+environment at call time:
 
-| Variable        | Default          | What it is                                    |
-| --------------- | ---------------- | --------------------------------------------- |
-| `DATABASE_PATH` | `smartfridge.db` | Path to the SQLite file that stores history.  |
+| Variable             | Default          | What it is                                                        |
+| -------------------- | ---------------- | ----------------------------------------------------------------- |
+| `DATABASE_PATH`      | `smartfridge.db` | Local SQLite file for history — used when no Turso URL is set.     |
+| `TURSO_DATABASE_URL` | *(unset)*        | If set, connect to this Turso/libSQL database instead of the file. |
+| `TURSO_AUTH_TOKEN`   | *(unset)*        | Auth token for the Turso database above.                          |
 
-The file (`*.db`) is git-ignored — it's your data, not code. Delete it to clear all
-history; the app recreates an empty one on the next run. History is best-effort by
-design: if the database can't be opened or written, it's logged server-side and the
-core analysis keeps working — nothing about scanning depends on it.
+Locally you don't need Turso at all — leave the Turso vars unset and history is written to
+the `DATABASE_PATH` file. The file (`*.db`) is git-ignored — it's your data, not code.
+Delete it to clear all history; the app recreates an empty one on the next run. History is
+best-effort by design: if the database can't be opened or written, it's logged server-side
+and the core analysis keeps working — nothing about scanning depends on it.
 
 Persistence lives in `storage.py`, which — like `vision_service.py` — has **no Flask
 dependency**, so a future agent layer can read and write history directly.
+
+---
+
+## Deploy for free (Vercel + Turso)
+
+The app runs on **Vercel's** free tier, with history stored in a free **Turso** database.
+Turso is needed because a serverless platform's filesystem is ephemeral — a plain SQLite
+file would be wiped between requests, so history wouldn't persist. Turso is a hosted,
+SQLite-compatible database that solves exactly that. Config for the deploy lives in
+[`vercel.json`](vercel.json); `app.py` is used directly as the serverless entry point.
+
+1. **Create a Turso database** at [turso.tech](https://turso.tech) (sign in with GitHub).
+   Create a database, then copy two values from its dashboard: the **database URL**
+   (looks like `libsql://<name>-<you>.turso.io`) and a freshly-generated **auth token**.
+2. **Import the repo into Vercel** at [vercel.com/new](https://vercel.com/new) — pick this
+   GitHub repo. Vercel auto-detects the Python config; you don't need to change build
+   settings.
+3. **Add environment variables** in Vercel (Project → Settings → Environment Variables),
+   matching your `.env`:
+   - `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` — from step 1.
+   - `VISION_API_KEY` — your vision provider key.
+   - `VISION_BASE_URL` and `VISION_MODEL` — and any `*_2` / `*_3` / `*_4` fallbacks you use.
+4. **Deploy.** Vercel builds and gives you a public URL. History and My Fridge now persist
+   in Turso across restarts and redeploys.
+
+> The Turso auth token is a secret — set it only in Vercel's dashboard (and your local
+> `.env`), never in committed files.
 
 ---
 

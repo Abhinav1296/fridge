@@ -1,14 +1,23 @@
-"""SQLite persistence for SmartFridge Vision (Phase 2).
+"""Inventory-history persistence for SmartFridge Vision (Phase 2).
 
 Like :mod:`vision_service`, this module is deliberately **framework-agnostic**: it has
 no Flask or HTTP coupling, so a future agent layer can read and write inventory history
 directly. It records one *scan* per analysis (every upload/capture is timestamped) plus
 the items and unidentified entries that scan produced.
 
-The database is plain SQLite via the standard-library :mod:`sqlite3` — no server to run
-and no extra dependency. The file location is read from the environment at call time::
+Storage is **libSQL** (a SQLite fork) via the ``libsql-client`` package, which lets the
+exact same code run against either:
 
-    DATABASE_PATH   — path to the SQLite file (default: ``smartfridge.db``).
+* a **local SQLite file** for development — the default; or
+* a hosted **Turso** database for cloud deploys (e.g. Vercel), where the local
+  filesystem is ephemeral/read-only and a real database is needed for data to persist.
+
+Which one is used is decided from the environment at call time:
+
+    TURSO_DATABASE_URL  — if set, connect to that Turso/libSQL database (remote).
+    TURSO_AUTH_TOKEN    — auth token for the Turso database (used with the URL above).
+    DATABASE_PATH       — local SQLite file path when no Turso URL is set
+                          (default: ``smartfridge.db``).
 
 All timestamps are stored as UTC ISO-8601 strings (``YYYY-MM-DDTHH:MM:SSZ``); callers /
 the UI convert to local time for display.
@@ -18,10 +27,11 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
+
+import libsql_client
 
 logger = logging.getLogger(__name__)
 
@@ -31,64 +41,100 @@ DEFAULT_DB_PATH = "smartfridge.db"
 SOURCE_UPLOAD = "upload"
 SOURCE_WEBCAM = "webcam"
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS scans (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at  TEXT    NOT NULL,               -- UTC ISO-8601, e.g. 2026-09-15T09:12:33Z
-    source      TEXT    NOT NULL,               -- 'upload' | 'webcam'
-    item_count  INTEGER NOT NULL DEFAULT 0      -- denormalized convenience count
-);
-
-CREATE TABLE IF NOT EXISTS items (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id               INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-    name                  TEXT    NOT NULL,
-    count                 INTEGER NOT NULL DEFAULT 1,
-    category              TEXT,
-    freshness             TEXT,
-    freshness_confidence  TEXT,
-    notes                 TEXT
-);
-
-CREATE TABLE IF NOT EXISTS unidentified (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    scan_id      INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-    description  TEXT,
-    reason       TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_items_scan        ON items(scan_id);
-CREATE INDEX IF NOT EXISTS idx_unidentified_scan ON unidentified(scan_id);
-CREATE INDEX IF NOT EXISTS idx_scans_created_at  ON scans(created_at);
-"""
+# Schema as discrete statements — libsql-client executes one statement per call (there is
+# no ``executescript``), so the DDL is kept as a list rather than one semicolon-joined blob.
+_SCHEMA_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS scans (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at  TEXT    NOT NULL,               -- UTC ISO-8601, e.g. 2026-09-15T09:12:33Z
+        source      TEXT    NOT NULL,               -- 'upload' | 'webcam'
+        item_count  INTEGER NOT NULL DEFAULT 0      -- denormalized convenience count
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS items (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_id               INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+        name                  TEXT    NOT NULL,
+        count                 INTEGER NOT NULL DEFAULT 1,
+        category              TEXT,
+        freshness             TEXT,
+        freshness_confidence  TEXT,
+        notes                 TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS unidentified (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_id      INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+        description  TEXT,
+        reason       TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_items_scan        ON items(scan_id)",
+    "CREATE INDEX IF NOT EXISTS idx_unidentified_scan ON unidentified(scan_id)",
+    "CREATE INDEX IF NOT EXISTS idx_scans_created_at  ON scans(created_at)",
+]
 
 
 def _db_path() -> str:
-    """Resolve the SQLite file path from the environment (read at call time)."""
+    """Resolve the local SQLite file path from the environment (read at call time)."""
     return os.getenv("DATABASE_PATH", DEFAULT_DB_PATH).strip() or DEFAULT_DB_PATH
 
 
+def _turso_url() -> str:
+    """Return the configured Turso/libSQL URL, or ``""`` to use the local file."""
+    return os.getenv("TURSO_DATABASE_URL", "").strip()
+
+
+def _make_client() -> libsql_client.ClientSync:
+    """Create a libSQL client for the configured target (remote Turso or local file)."""
+    url = _turso_url()
+    if url:
+        token = os.getenv("TURSO_AUTH_TOKEN", "").strip() or None
+        return libsql_client.create_client_sync(url, auth_token=token)
+    # Local file mode: libsql wants a forward-slashed ``file:`` URL, absolute so it doesn't
+    # depend on the process's working directory.
+    file_url = "file:" + os.path.abspath(_db_path()).replace("\\", "/")
+    return libsql_client.create_client_sync(file_url)
+
+
+def _target_desc() -> str:
+    """A log-safe description of the storage target (never includes the auth token)."""
+    url = _turso_url()
+    if url:
+        host = url.split("://", 1)[-1].split("/", 1)[0]
+        return f"Turso ({host})"
+    return _db_path()
+
+
 @contextmanager
-def _connect() -> Iterator[sqlite3.Connection]:
-    """Open a connection with row access by name; commit on success, rollback on error."""
-    conn = sqlite3.connect(_db_path())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
+def _connect() -> Iterator[libsql_client.ClientSync]:
+    """Yield a libSQL client, always closing it afterwards."""
+    client = _make_client()
     try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+        yield client
     finally:
-        conn.close()
+        client.close()
+
+
+def _rows_to_dicts(result_set: libsql_client.ResultSet) -> list[dict[str, Any]]:
+    """Convert a libSQL result set into a list of plain ``{column: value}`` dicts.
+
+    libSQL ``Row`` objects support name/index access but are not directly ``dict()``-able,
+    so we zip them with the result's column names.
+    """
+    columns = result_set.columns
+    return [dict(zip(columns, row)) for row in result_set.rows]
 
 
 def init_db() -> None:
     """Create the tables and indexes if they don't yet exist (idempotent)."""
-    with _connect() as conn:
-        conn.executescript(_SCHEMA)
-    logger.info("SmartFridge history database ready at %s", _db_path())
+    with _connect() as client:
+        for statement in _SCHEMA_STATEMENTS:
+            client.execute(statement)
+    logger.info("SmartFridge history database ready at %s", _target_desc())
 
 
 def save_scan(
@@ -111,38 +157,45 @@ def save_scan(
     unidentified = result.get("unidentified") or []
     when = (created_at or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    with _connect() as conn:
-        cur = conn.execute(
-            "INSERT INTO scans (created_at, source, item_count) VALUES (?, ?, ?)",
-            (when, source, len(items)),
-        )
-        scan_id = int(cur.lastrowid)
-
-        for item in items:
-            conn.execute(
-                "INSERT INTO items "
-                "(scan_id, name, count, category, freshness, freshness_confidence, notes) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    scan_id,
-                    str(item.get("name", "")),
-                    _as_int(item.get("count"), default=1),
-                    _as_opt_str(item.get("category")),
-                    _as_opt_str(item.get("freshness")),
-                    _as_opt_str(item.get("freshness_confidence")),
-                    _as_opt_str(item.get("notes")),
-                ),
+    with _connect() as client:
+        # One interactive transaction so a scan and its rows are written atomically.
+        tx = client.transaction()
+        try:
+            head = tx.execute(
+                "INSERT INTO scans (created_at, source, item_count) VALUES (?, ?, ?)",
+                [when, source, len(items)],
             )
+            scan_id = int(head.last_insert_rowid)
 
-        for entry in unidentified:
-            conn.execute(
-                "INSERT INTO unidentified (scan_id, description, reason) VALUES (?, ?, ?)",
-                (
-                    scan_id,
-                    _as_opt_str(entry.get("description")),
-                    _as_opt_str(entry.get("reason")),
-                ),
-            )
+            for item in items:
+                tx.execute(
+                    "INSERT INTO items "
+                    "(scan_id, name, count, category, freshness, freshness_confidence, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        scan_id,
+                        str(item.get("name", "")),
+                        _as_int(item.get("count"), default=1),
+                        _as_opt_str(item.get("category")),
+                        _as_opt_str(item.get("freshness")),
+                        _as_opt_str(item.get("freshness_confidence")),
+                        _as_opt_str(item.get("notes")),
+                    ],
+                )
+
+            for entry in unidentified:
+                tx.execute(
+                    "INSERT INTO unidentified (scan_id, description, reason) VALUES (?, ?, ?)",
+                    [
+                        scan_id,
+                        _as_opt_str(entry.get("description")),
+                        _as_opt_str(entry.get("reason")),
+                    ],
+                )
+            tx.commit()
+        except Exception:
+            tx.rollback()
+            raise
 
     logger.info("Saved scan %d (source=%s, %d items)", scan_id, source, len(items))
     return scan_id
@@ -157,23 +210,27 @@ def list_scans(limit: int = 50) -> list[dict[str, Any]]:
     Returns:
         A list of dicts: ``{id, created_at, source, item_count, items, unidentified}``.
     """
-    with _connect() as conn:
-        scan_rows = conn.execute(
-            "SELECT id, created_at, source, item_count "
-            "FROM scans ORDER BY id DESC LIMIT ?",
-            (max(1, int(limit)),),
-        ).fetchall()
-        return [_hydrate_scan(conn, scan) for scan in scan_rows]
+    with _connect() as client:
+        scans = _rows_to_dicts(
+            client.execute(
+                "SELECT id, created_at, source, item_count "
+                "FROM scans ORDER BY id DESC LIMIT ?",
+                [max(1, int(limit))],
+            )
+        )
+        return [_hydrate_scan(client, scan) for scan in scans]
 
 
 def get_scan(scan_id: int) -> dict[str, Any] | None:
     """Return a single scan (with items + unidentified), or ``None`` if it doesn't exist."""
-    with _connect() as conn:
-        scan = conn.execute(
-            "SELECT id, created_at, source, item_count FROM scans WHERE id = ?",
-            (int(scan_id),),
-        ).fetchone()
-        return _hydrate_scan(conn, scan) if scan is not None else None
+    with _connect() as client:
+        scans = _rows_to_dicts(
+            client.execute(
+                "SELECT id, created_at, source, item_count FROM scans WHERE id = ?",
+                [int(scan_id)],
+            )
+        )
+        return _hydrate_scan(client, scans[0]) if scans else None
 
 
 def get_latest_scan() -> dict[str, Any] | None:
@@ -183,32 +240,40 @@ def get_latest_scan() -> dict[str, Any] | None:
     the current inventory — this is the "what's in my fridge now" view. A future rollup
     that reconciles across scans can replace this without changing callers.
     """
-    with _connect() as conn:
-        scan = conn.execute(
-            "SELECT id, created_at, source, item_count "
-            "FROM scans ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        return _hydrate_scan(conn, scan) if scan is not None else None
+    with _connect() as client:
+        scans = _rows_to_dicts(
+            client.execute(
+                "SELECT id, created_at, source, item_count "
+                "FROM scans ORDER BY id DESC LIMIT 1"
+            )
+        )
+        return _hydrate_scan(client, scans[0]) if scans else None
 
 
-def _hydrate_scan(conn: sqlite3.Connection, scan: sqlite3.Row) -> dict[str, Any]:
+def _hydrate_scan(
+    client: libsql_client.ClientSync, scan: dict[str, Any]
+) -> dict[str, Any]:
     """Attach a scan row's items and unidentified entries, returning a plain dict."""
-    item_rows = conn.execute(
-        "SELECT name, count, category, freshness, freshness_confidence, notes "
-        "FROM items WHERE scan_id = ? ORDER BY id",
-        (scan["id"],),
-    ).fetchall()
-    unidentified_rows = conn.execute(
-        "SELECT description, reason FROM unidentified WHERE scan_id = ? ORDER BY id",
-        (scan["id"],),
-    ).fetchall()
+    items = _rows_to_dicts(
+        client.execute(
+            "SELECT name, count, category, freshness, freshness_confidence, notes "
+            "FROM items WHERE scan_id = ? ORDER BY id",
+            [scan["id"]],
+        )
+    )
+    unidentified = _rows_to_dicts(
+        client.execute(
+            "SELECT description, reason FROM unidentified WHERE scan_id = ? ORDER BY id",
+            [scan["id"]],
+        )
+    )
     return {
         "id": scan["id"],
         "created_at": scan["created_at"],
         "source": scan["source"],
         "item_count": scan["item_count"],
-        "items": [dict(row) for row in item_rows],
-        "unidentified": [dict(row) for row in unidentified_rows],
+        "items": items,
+        "unidentified": unidentified,
     }
 
 
