@@ -198,6 +198,9 @@ capstone/
 ├── static/
 │   ├── style.css        # Responsive, mobile-friendly styles + freshness badges
 │   └── app.js           # Upload, webcam capture, fetch, and result rendering
+├── deploy/
+│   └── smartfridge.service  # systemd unit for self-hosting on a Pi / VM (autostart)
+├── vercel.json          # Vercel serverless deploy config
 ├── requirements.txt
 ├── .env.example         # Config template (copy to .env)
 ├── smartfridge.db       # Local history database (auto-created, git-ignored)
@@ -317,6 +320,67 @@ SQLite-compatible database that solves exactly that. Config for the deploy lives
 
 > The Turso auth token is a secret — set it only in Vercel's dashboard (and your local
 > `.env`), never in committed files.
+
+---
+
+## Run on Raspberry Pi Desktop (VirtualBox)
+
+Toward the goal of running on a real Raspberry Pi, you can rehearse the whole workflow on
+a PC using **[Raspberry Pi Desktop](https://www.raspberrypi.com/software/raspberry-pi-desktop/)**
+— the Raspberry Pi Foundation's **x86 (PC) edition** of their Debian OS — inside **Oracle
+VirtualBox**. Because it's x86 it runs at native speed (VirtualBox virtualises x86; it does
+*not* emulate ARM). It faithfully rehearses the OS + desktop + app (`apt`, Python, run,
+persist, autostart); it does **not** have ARM, GPIO, or a Pi Camera — those are validated
+only on real hardware later.
+
+**1. Create the VM.** Install VirtualBox on Windows. In **File → Preferences → General**, set
+the *Default Machine Folder* to a drive with room (e.g. `D:\VirtualBox VMs`) — the virtual
+disk grows to ~15–25 GB. Download the Raspberry Pi Desktop ISO there. Create a VM: type
+**Linux / Debian (32-bit)** (match the ISO's architecture), **3072 MB** RAM, **2 CPUs**, a
+**25 GB** dynamically-allocated disk; enable **PAE/NX** (System → Processor) and set Video
+Memory to 128 MB. Attach the ISO and do a **Graphical Install** onto the disk (not the live
+"Run" option). Optionally install Guest Additions for a resizable window.
+
+**2. Forward the app's port.** Settings → Network → Adapter 1 (NAT) → Advanced → *Port
+Forwarding*: add Host `5000` → Guest `5000`. (This lets your Windows browser reach the app
+at `localhost` — see the webcam note below.)
+
+**3. Install the app in the guest.** Open a terminal in the Pi desktop:
+
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip git
+git clone <your capstone repo> ~/capstone && cd ~/capstone
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env      # then edit .env: set VISION_API_KEY; leave TURSO_* unset
+```
+
+Leaving `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` unset stores history in a local SQLite
+file on the VM's disk (a real disk, so it persists) — no code change needed.
+
+**4. Run it.**
+
+```bash
+gunicorn --bind 0.0.0.0:5000 app:app
+```
+
+Then open **`http://localhost:5000` in your Windows browser** (via the port forward). Because
+`localhost` is a *secure context*, the browser's `getUserMedia` works, so the **Webcam tab
+uses your PC's camera** with no VirtualBox webcam passthrough.
+
+> **Webcam & secure contexts.** Browsers only allow camera access over `localhost` or HTTPS.
+> Reaching the app from another device by the machine's LAN IP (`http://<ip>:5000`) is *not*
+> a secure context and the camera will be blocked — open it in the machine's own browser at
+> `localhost`, or put it behind HTTPS. Alternatively, run the app *inside* the VM with
+> `python app.py` and browse at `localhost` in the guest's own browser; the Webcam tab then
+> needs a webcam passed into the VM (VirtualBox Extension Pack + `VBoxManage controlvm "<VM>"
+> webcam attach`).
+
+**5. Start on boot (like a real Pi appliance).** [`deploy/smartfridge.service`](deploy/smartfridge.service)
+is a systemd unit that runs the app under gunicorn and restarts it on crash. Follow the
+install steps in its header (`sudo systemctl enable --now smartfridge`), then reboot and
+confirm the app comes back up on its own. This is exactly how you'll run it on real Pi
+hardware.
 
 ---
 
