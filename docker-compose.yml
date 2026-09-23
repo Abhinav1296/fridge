@@ -1,0 +1,36 @@
+# Local / self-hosted single-container deployment.
+#
+#     docker compose up --build
+#
+# Reads configuration from a .env file if present (never commit it). By default
+# the app stores everything in a SQLite file on the named volume `fridge-data`,
+# so it survives container restarts. To use hosted libSQL instead, set
+# TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in .env and the volume goes unused.
+
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Overrides the image default only to be explicit about where state lives.
+      DATABASE_PATH: /data/smartfridge.db
+    volumes:
+      - fridge-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  fridge-data:

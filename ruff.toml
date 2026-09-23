@@ -1,0 +1,16 @@
+# Ruff lint config — the linter CI runs on every push/PR (see .github/workflows/ci.yml).
+#
+# Run locally with:  ruff check .   (and `ruff check . --fix` to auto-apply safe fixes)
+#
+# Line length is generous (120) so the existing prose-width code passes without a reformat;
+# the real value here is the correctness-oriented rules: pyflakes (unused imports / undefined
+# names), bugbear, and import ordering.
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "data", "__pycache__"]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "B905",  # zip() without strict= — call sites here zip equal-length sequences by construction
+]

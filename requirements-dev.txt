@@ -1,0 +1,10 @@
+# Development / CI dependencies (not needed to run the app in production).
+#
+#     pip install -r requirements.txt -r requirements-dev.txt
+#     pytest
+#
+# The test suite runs entirely offline: it forces storage into local-SQLite mode and
+# never calls the vision or any external API (see tests/conftest.py).
+
+pytest>=8.0,<9.0
+ruff>=0.16,<0.17
