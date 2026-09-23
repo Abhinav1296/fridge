@@ -48,6 +48,7 @@ import nutrition
 import optimizer
 import recommender
 import storage
+import vectorstore
 import vision_service
 from agent import AgentAPIError, AgentConfigError
 from nutrition import NutritionError
@@ -257,6 +258,68 @@ def api_plan():
         logger.exception("Meal-plan optimizer failed")
         return jsonify({"error": "Couldn't build a meal plan right now."}), 500
     return jsonify(plan)
+
+
+# --- Semantic recipe search --------------------------------------------------
+
+# Built once from the recipe corpus + the recommender's embedding math, then
+# reused across requests. Rebuilt only if explicitly reset (tests / data reload).
+_recipe_searcher: vectorstore.RecipeSearcher | None = None
+
+
+def _get_recipe_searcher() -> vectorstore.RecipeSearcher:
+    """Return the process-wide recipe search index, building it on first use."""
+    global _recipe_searcher
+    if _recipe_searcher is None:
+        _recipe_searcher = vectorstore.RecipeSearcher(
+            recommender.all_recipes(),
+            embed=recommender.embed_ingredients,
+            normalize=recommender.normalize_ingredient,
+            prettify=recommender._prettify,
+        )
+    return _recipe_searcher
+
+
+@app.get("/api/recipes/search")
+def api_recipe_search():
+    """Semantic + lexical search over the whole recipe corpus.
+
+    Query params: ``q`` (the search text) and optional ``k`` (1-12, default 6).
+    Ranks by meaning (ingredient-embedding similarity) blended with word overlap
+    on titles/tags, so it works for both ingredient and descriptor queries.
+    Returns an empty result set (not an error) for a blank query.
+    """
+    query = (request.args.get("q") or "").strip()
+    k = _clamp_int(request.args.get("k"), default=6, lo=1, hi=12)
+    if not query:
+        return jsonify({"query": "", "results": [], "count": 0, "semantic": False})
+    try:
+        searcher = _get_recipe_searcher()
+        results = searcher.search(query, k=k)
+    except Exception:  # noqa: BLE001 — search must never take the page down
+        logger.exception("Recipe search failed")
+        return jsonify({"error": "Couldn't search recipes right now."}), 500
+    return jsonify(
+        {"query": query, "results": results, "count": len(results), "semantic": searcher.embedded}
+    )
+
+
+@app.get("/api/recipes/<recipe_id>/similar")
+def api_recipe_similar(recipe_id: str):
+    """Return recipes most semantically similar to ``recipe_id`` (nearest neighbours).
+
+    Optional ``k`` query param (1-8, default 4). 404 if the recipe id is unknown.
+    """
+    k = _clamp_int(request.args.get("k"), default=4, lo=1, hi=8)
+    try:
+        searcher = _get_recipe_searcher()
+        results = searcher.similar(recipe_id, k=k)
+    except Exception:  # noqa: BLE001 — a lookup failure shouldn't 500 the page
+        logger.exception("Similar-recipe lookup failed")
+        return jsonify({"error": "Couldn't find similar recipes right now."}), 500
+    if not results and recipe_id not in searcher.index:
+        return jsonify({"error": "Unknown recipe."}), 404
+    return jsonify({"id": recipe_id, "results": results, "count": len(results)})
 
 
 @app.get("/api/nutrition")

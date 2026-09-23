@@ -214,6 +214,31 @@ def _cosine(a: list[float] | None, b: list[float] | None) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
+# --- Public accessors (shared with the semantic search index) ----------------
+
+
+def all_recipes() -> list[dict[str, Any]]:
+    """Return the recipe corpus as shallow copies (id/title/ingredients/tags/time_min).
+
+    Exposed for :mod:`vectorstore`, which builds a semantic search index over the
+    same corpus. Copies keep callers from mutating the module cache.
+    """
+    return [dict(recipe) for recipe in _load_recipes()]
+
+
+def embed_ingredients(tokens: list[str]) -> list[float] | None:
+    """Return the L2-normalized mean embedding of the given canonical tokens.
+
+    None when no token has a trained vector (or embeddings are unavailable). Shared
+    by recipe scoring and the semantic search index so both rank in the same vector
+    space. Tokens are lower-cased to match the embedding vocabulary.
+    """
+    embeddings = _load_embeddings()
+    return _mean_vector(
+        [str(token).lower() for token in tokens], embeddings["vectors"], embeddings["dim"]
+    )
+
+
 # --- Date helpers ------------------------------------------------------------
 
 

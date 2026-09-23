@@ -77,6 +77,13 @@ const els = {
   shoppingList: document.getElementById("shopping-list"),
   suggestMl: document.getElementById("suggest-ml"),
 
+  // Semantic recipe search elements.
+  recipeSearchForm: document.getElementById("recipe-search-form"),
+  recipeSearchInput: document.getElementById("recipe-search-input"),
+  recipeSearchError: document.getElementById("recipe-search-error"),
+  recipeSearchStatus: document.getElementById("recipe-search-status"),
+  recipeSearchResults: document.getElementById("recipe-search-results"),
+
   // Meal Plan tab elements.
   planDays: document.getElementById("plan-days"),
   planMeals: document.getElementById("plan-meals"),
@@ -296,6 +303,7 @@ els.refreshFridge.addEventListener("click", loadFridge);
 els.refreshHistory.addEventListener("click", loadHistory);
 els.refreshSuggestions.addEventListener("click", loadSuggestions);
 els.perishForm.addEventListener("submit", addPerishable);
+els.recipeSearchForm.addEventListener("submit", searchRecipes);
 els.fridgeScanCta.addEventListener("click", () => activateTab("upload"));
 els.fridgeToggle.addEventListener("click", () => setFridgeItemsOpen(!fridgeItemsOpen));
 els.planBuild.addEventListener("click", loadPlan);
@@ -1221,6 +1229,151 @@ function chipRow(label, names, chipClass) {
     row.appendChild(chip);
   }
   return row;
+}
+
+// --- Semantic recipe search -------------------------------------------------
+
+async function searchRecipes(e) {
+  if (e) e.preventDefault();
+  const query = (els.recipeSearchInput.value || "").trim();
+  els.recipeSearchError.hidden = true;
+  if (!query) {
+    els.recipeSearchResults.innerHTML = "";
+    els.recipeSearchStatus.hidden = true;
+    return;
+  }
+  els.recipeSearchStatus.hidden = false;
+  els.recipeSearchStatus.textContent = "Searching…";
+  try {
+    const response = await fetch(`/api/recipes/search?q=${encodeURIComponent(query)}`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.recipeSearchError.textContent =
+        (payload && payload.error) || "Couldn't search recipes right now.";
+      els.recipeSearchError.hidden = false;
+      els.recipeSearchStatus.hidden = true;
+      return;
+    }
+    const results = (payload && payload.results) || [];
+    renderRecipeSearch(
+      results,
+      results.length
+        ? `${results.length} recipe${results.length === 1 ? "" : "s"} for “${query}”`
+        : `No recipes matched “${query}”. Try an ingredient or a dish style.`,
+    );
+  } catch (_err) {
+    els.recipeSearchError.textContent = "Couldn't reach the server to search recipes.";
+    els.recipeSearchError.hidden = false;
+    els.recipeSearchStatus.hidden = true;
+  }
+}
+
+async function findSimilarRecipes(recipeId, title, button) {
+  if (!recipeId) return;
+  els.recipeSearchError.hidden = true;
+  const original = button ? button.textContent : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Finding…";
+  }
+  try {
+    const response = await fetch(`/api/recipes/${encodeURIComponent(recipeId)}/similar`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.recipeSearchError.textContent =
+        (payload && payload.error) || "Couldn't find similar recipes right now.";
+      els.recipeSearchError.hidden = false;
+      return;
+    }
+    const results = (payload && payload.results) || [];
+    renderRecipeSearch(
+      results,
+      results.length ? `Recipes similar to “${title}”` : `No similar recipes for “${title}”.`,
+    );
+    els.recipeSearchResults.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (_err) {
+    els.recipeSearchError.textContent = "Couldn't reach the server for similar recipes.";
+    els.recipeSearchError.hidden = false;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+function renderRecipeSearch(results, statusText) {
+  els.recipeSearchStatus.hidden = false;
+  els.recipeSearchStatus.textContent = statusText;
+  els.recipeSearchResults.innerHTML = "";
+  for (const r of results) els.recipeSearchResults.appendChild(buildSearchRecipeCard(r));
+}
+
+function buildSearchRecipeCard(r) {
+  const card = document.createElement("div");
+  card.className = "card recipe-card search-recipe-card";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("h3");
+  title.className = "card-name";
+  title.textContent = r.title || "Recipe";
+  head.appendChild(title);
+  if (Number.isFinite(r.similarity) && r.similarity > 0) {
+    const match = document.createElement("span");
+    match.className = "match-badge";
+    match.textContent = `${Math.round(r.similarity * 100)}% match`;
+    head.appendChild(match);
+  }
+  card.appendChild(head);
+
+  // Time + tag chips.
+  const meta = document.createElement("div");
+  meta.className = "recipe-tags";
+  if (Number.isFinite(r.time_min)) {
+    const time = document.createElement("span");
+    time.className = "recipe-tag";
+    time.textContent = `⏱ ${r.time_min} min`;
+    meta.appendChild(time);
+  }
+  for (const tag of Array.isArray(r.tags) ? r.tags : []) {
+    const chip = document.createElement("span");
+    chip.className = "recipe-tag";
+    chip.textContent = tag;
+    meta.appendChild(chip);
+  }
+  if (meta.children.length) card.appendChild(meta);
+
+  // Why it matched.
+  const whyBits = [];
+  if (Array.isArray(r.matched) && r.matched.length) whyBits.push(r.matched.join(", "));
+  if (Array.isArray(r.matched_terms) && r.matched_terms.length) whyBits.push(r.matched_terms.join(", "));
+  if (whyBits.length) {
+    const why = document.createElement("p");
+    why.className = "recipe-why muted small";
+    why.textContent = `Matches ${whyBits.join(" · ")}`;
+    card.appendChild(why);
+  }
+
+  // Full ingredient list (muted).
+  if (Array.isArray(r.ingredients) && r.ingredients.length) {
+    const ing = document.createElement("p");
+    ing.className = "recipe-ingredients muted small";
+    ing.textContent = r.ingredients.join(", ");
+    card.appendChild(ing);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "search-card-actions";
+  const similarBtn = document.createElement("button");
+  similarBtn.type = "button";
+  similarBtn.className = "btn-similar";
+  similarBtn.textContent = "Find similar";
+  similarBtn.addEventListener("click", () => findSimilarRecipes(r.id, r.title, similarBtn));
+  actions.appendChild(similarBtn);
+  card.appendChild(actions);
+
+  return card;
 }
 
 function buildShoppingRow(s) {

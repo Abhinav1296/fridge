@@ -311,3 +311,46 @@ def test_api_cook_clears_only_the_consumed_quantity_of_a_perishable(client, clea
     # One block of cheese is still tracked (the later use-by; soonest is cleared first).
     remaining = client.get("/api/perishables").get_json()["perishables"]
     assert [p["use_by"] for p in remaining] == ["2026-10-05"]
+
+
+# --- Semantic recipe search -------------------------------------------------
+
+
+def test_api_recipe_search_blank_query(client):
+    resp = client.get("/api/recipes/search")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body == {"query": "", "results": [], "count": 0, "semantic": False}
+
+
+def test_api_recipe_search_returns_ranked_results(client):
+    resp = client.get("/api/recipes/search", query_string={"q": "creamy paneer curry"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["query"] == "creamy paneer curry"
+    assert body["semantic"] is True  # the trained embeddings ship with the repo
+    assert body["count"] == len(body["results"]) > 0
+    top = body["results"][0]
+    assert "paneer" in top["title"].lower()
+    assert {"id", "title", "score", "similarity", "matched", "ingredients"} <= set(top)
+
+
+def test_api_recipe_search_clamps_k(client):
+    resp = client.get("/api/recipes/search", query_string={"q": "curry", "k": "999"})
+    assert resp.status_code == 200
+    assert resp.get_json()["count"] <= 12  # k is clamped to the 1..12 window
+
+
+def test_api_recipe_similar_returns_neighbors(client):
+    resp = client.get("/api/recipes/paneer_butter_masala/similar")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["id"] == "paneer_butter_masala"
+    ids = [r["id"] for r in body["results"]]
+    assert ids and "paneer_butter_masala" not in ids  # a recipe is never similar to itself
+
+
+def test_api_recipe_similar_unknown_returns_404(client):
+    resp = client.get("/api/recipes/not-a-real-recipe/similar")
+    assert resp.status_code == 404
+    assert "error" in resp.get_json()

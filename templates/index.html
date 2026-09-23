@@ -93,6 +93,20 @@
           <p id="perish-empty" class="muted small" hidden>No tracked items yet — add one above.</p>
         </div>
 
+        <!-- Semantic recipe search — finds any recipe by meaning using the
+             ingredient-embedding vector index (vectorstore.py), not just keywords. -->
+        <div class="recipe-search">
+          <h3 class="section-title">🔎 Find a recipe</h3>
+          <p class="muted small">Search every recipe by meaning — try “creamy paneer dinner” or “quick vegetarian breakfast”, not just exact names.</p>
+          <form id="recipe-search-form" class="recipe-search-form" role="search">
+            <input id="recipe-search-input" class="recipe-search-input perish-input" type="search" placeholder="What do you feel like cooking?" maxlength="120" autocomplete="off" aria-label="Search recipes" />
+            <button class="btn btn-primary" type="submit">Search</button>
+          </form>
+          <p id="recipe-search-error" class="error-banner" role="alert" hidden></p>
+          <p id="recipe-search-status" class="muted small recipe-search-status" hidden></p>
+          <div id="recipe-search-results" class="recipes-list"></div>
+        </div>
+
         <div id="suggest-loading" class="loading" role="status" aria-live="polite" hidden>
           <span class="spinner" aria-hidden="true"></span>
           <span>Building suggestions…</span>

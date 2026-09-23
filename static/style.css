@@ -1058,3 +1058,64 @@ body {
   .perish-row { flex-wrap: wrap; }
   .perish-action { flex: 1; }
 }
+
+/* --- Semantic recipe search ------------------------------------------------ */
+
+.recipe-search {
+  margin: 1rem 0 0.25rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.recipe-search-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.recipe-search-input { flex: 1; }
+.recipe-search-status { margin: 0.6rem 0 0; }
+
+/* Search-result cards reuse .recipe-card; these tune the search-only extras. */
+.search-recipe-card .recipe-tag {
+  background: var(--surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.match-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: var(--fresh-bg);
+  color: var(--fresh);
+  white-space: nowrap;
+}
+.recipe-why { margin: 0.55rem 0 0; }
+.recipe-ingredients { margin: 0.3rem 0 0; }
+.search-card-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+}
+.btn-similar {
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-similar:hover:not(:disabled) {
+  background: var(--primary);
+  color: var(--primary-contrast);
+}
+.btn-similar:disabled { opacity: 0.7; cursor: default; }
+
+@media (max-width: 560px) {
+  .recipe-search-form { flex-wrap: wrap; }
+  .recipe-search-input { flex: 1 1 100%; }
+  .recipe-search-form .btn { flex: 1; }
+}
