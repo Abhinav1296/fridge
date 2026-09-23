@@ -13,11 +13,19 @@
 const els = {
   tabFridge: document.getElementById("tab-fridge"),
   tabSuggestions: document.getElementById("tab-suggestions"),
+  tabPlan: document.getElementById("tab-plan"),
+  tabNutrition: document.getElementById("tab-nutrition"),
+  tabAnalytics: document.getElementById("tab-analytics"),
+  tabChef: document.getElementById("tab-chef"),
   tabUpload: document.getElementById("tab-upload"),
   tabWebcam: document.getElementById("tab-webcam"),
   tabHistory: document.getElementById("tab-history"),
   panelFridge: document.getElementById("panel-fridge"),
   panelSuggestions: document.getElementById("panel-suggestions"),
+  panelPlan: document.getElementById("panel-plan"),
+  panelNutrition: document.getElementById("panel-nutrition"),
+  panelAnalytics: document.getElementById("panel-analytics"),
+  panelChef: document.getElementById("panel-chef"),
   panelUpload: document.getElementById("panel-upload"),
   panelWebcam: document.getElementById("panel-webcam"),
   panelHistory: document.getElementById("panel-history"),
@@ -68,6 +76,77 @@ const els = {
   shoppingSection: document.getElementById("shopping-section"),
   shoppingList: document.getElementById("shopping-list"),
   suggestMl: document.getElementById("suggest-ml"),
+
+  // Meal Plan tab elements.
+  planDays: document.getElementById("plan-days"),
+  planMeals: document.getElementById("plan-meals"),
+  planBuild: document.getElementById("plan-build"),
+  planLoading: document.getElementById("plan-loading"),
+  planError: document.getElementById("plan-error"),
+  planBody: document.getElementById("plan-body"),
+  planMetrics: document.getElementById("plan-metrics"),
+  planNotes: document.getElementById("plan-notes"),
+  planEmpty: document.getElementById("plan-empty"),
+  planMealsList: document.getElementById("plan-meals-list"),
+  planShoppingSection: document.getElementById("plan-shopping-section"),
+  planShoppingCount: document.getElementById("plan-shopping-count"),
+  planShopping: document.getElementById("plan-shopping"),
+  planAtriskSection: document.getElementById("plan-atrisk-section"),
+  planAtrisk: document.getElementById("plan-atrisk"),
+  planNutritionSection: document.getElementById("plan-nutrition-section"),
+  planNutrition: document.getElementById("plan-nutrition"),
+  planNutritionBasis: document.getElementById("plan-nutrition-basis"),
+
+  // Nutrition tab elements.
+  nutriRefresh: document.getElementById("nutri-refresh"),
+  nutriLoading: document.getElementById("nutri-loading"),
+  nutriError: document.getElementById("nutri-error"),
+  nutriBody: document.getElementById("nutri-body"),
+  nutriMetrics: document.getElementById("nutri-metrics"),
+  nutriEmpty: document.getElementById("nutri-empty"),
+  nutriTableSection: document.getElementById("nutri-table-section"),
+  nutriTable: document.getElementById("nutri-table"),
+  nutriCount: document.getElementById("nutri-count"),
+
+  // Barcode scanner (inside the Nutrition tab).
+  barcodeForm: document.getElementById("barcode-form"),
+  barcodeInput: document.getElementById("barcode-input"),
+  barcodeLookup: document.getElementById("barcode-lookup"),
+  barcodeScan: document.getElementById("barcode-scan"),
+  barcodeStop: document.getElementById("barcode-stop"),
+  barcodeCamera: document.getElementById("barcode-camera"),
+  barcodeVideo: document.getElementById("barcode-video"),
+  barcodeError: document.getElementById("barcode-error"),
+  barcodeResult: document.getElementById("barcode-result"),
+
+  // Analytics tab elements.
+  analyticsRefresh: document.getElementById("analytics-refresh"),
+  analyticsLoading: document.getElementById("analytics-loading"),
+  analyticsError: document.getElementById("analytics-error"),
+  analyticsBody: document.getElementById("analytics-body"),
+  analyticsHeadline: document.getElementById("analytics-headline"),
+  analyticsMetrics: document.getElementById("analytics-metrics"),
+  analyticsEmpty: document.getElementById("analytics-empty"),
+  analyticsTrendSection: document.getElementById("analytics-trend-section"),
+  analyticsTrend: document.getElementById("analytics-trend"),
+  analyticsTopSection: document.getElementById("analytics-top-section"),
+  analyticsTop: document.getElementById("analytics-top"),
+  analyticsTopCount: document.getElementById("analytics-top-count"),
+  wasteForm: document.getElementById("waste-form"),
+  wasteName: document.getElementById("waste-name"),
+  wasteCost: document.getElementById("waste-cost"),
+  wasteUsed: document.getElementById("waste-used"),
+  wasteWasted: document.getElementById("waste-wasted"),
+  wasteError: document.getElementById("waste-error"),
+  wasteNotice: document.getElementById("waste-notice"),
+
+  // Chef (agent) tab elements.
+  chefLog: document.getElementById("chef-log"),
+  chefIntro: document.getElementById("chef-intro"),
+  chefError: document.getElementById("chef-error"),
+  chefForm: document.getElementById("chef-form"),
+  chefInput: document.getElementById("chef-input"),
+  chefSend: document.getElementById("chef-send"),
 
   dropzone: document.getElementById("dropzone"),
   fileInput: document.getElementById("file-input"),
@@ -124,11 +203,32 @@ const CATEGORY_ORDER = ["fruit", "vegetable", "dairy", "beverage", "packaged", "
 let fridgeItemsOpen = true;
 let fridgeHasUnidentified = false;
 
+// The Meal Plan tab solves on first open, then only when the user hits "Build plan".
+let planLoadedOnce = false;
+// The Nutrition tab loads its cached dashboard on first open; the "Refresh" button pulls
+// live from Open Food Facts. The barcode scanner keeps its own camera stream + detect loop.
+let nutritionLoadedOnce = false;
+let nutritionBusy = false;
+let barcodeStream = null;
+let barcodeScanning = false;
+let barcodeRaf = null;
+// The Analytics tab loads the waste-log summary on first open; "Refresh", logging an item,
+// or resolving a tracked item re-pulls it. `wasteBusy` guards the manual log buttons.
+let analyticsLoadedOnce = false;
+let wasteBusy = false;
+// The Chef holds a short running transcript so follow-up questions have context.
+const chefHistory = [];
+let chefBusy = false;
+
 // --- Tab switching ----------------------------------------------------------
 function activateTab(which) {
   const tabs = {
     fridge: [els.tabFridge, els.panelFridge],
     suggestions: [els.tabSuggestions, els.panelSuggestions],
+    plan: [els.tabPlan, els.panelPlan],
+    nutrition: [els.tabNutrition, els.panelNutrition],
+    analytics: [els.tabAnalytics, els.panelAnalytics],
+    chef: [els.tabChef, els.panelChef],
     upload: [els.tabUpload, els.panelUpload],
     webcam: [els.tabWebcam, els.panelWebcam],
     history: [els.tabHistory, els.panelHistory],
@@ -141,9 +241,12 @@ function activateTab(which) {
     panel.hidden = !active;
   }
 
-  // The camera only belongs to the Webcam tab.
+  // The webcam camera belongs only to the Webcam tab; the barcode camera only to Nutrition.
   if (which !== "webcam") {
     stopCamera();
+  }
+  if (which !== "nutrition") {
+    stopBarcodeScan();
   }
 
   // The capture flow (preview/loading/results) belongs only to the Upload and Webcam
@@ -156,11 +259,36 @@ function activateTab(which) {
   } else if (which === "suggestions") {
     loadPerishables();
     loadSuggestions();
+  } else if (which === "plan") {
+    // Build a plan automatically the first time the tab is opened; after that the user
+    // rebuilds explicitly (so changing days/meals doesn't re-solve on every tab switch).
+    if (!planLoadedOnce) {
+      planLoadedOnce = true;
+      loadPlan();
+    }
+  } else if (which === "nutrition") {
+    // Load the cached dashboard on first open; the "Refresh" button pulls live data.
+    if (!nutritionLoadedOnce) {
+      nutritionLoadedOnce = true;
+      loadNutrition();
+    }
+  } else if (which === "analytics") {
+    // Load the waste-log summary on first open; the "Refresh" button re-pulls it.
+    if (!analyticsLoadedOnce) {
+      analyticsLoadedOnce = true;
+      loadAnalytics();
+    }
+  } else if (which === "chef") {
+    els.chefInput.focus();
   }
 }
 
 els.tabFridge.addEventListener("click", () => activateTab("fridge"));
 els.tabSuggestions.addEventListener("click", () => activateTab("suggestions"));
+els.tabPlan.addEventListener("click", () => activateTab("plan"));
+els.tabNutrition.addEventListener("click", () => activateTab("nutrition"));
+els.tabAnalytics.addEventListener("click", () => activateTab("analytics"));
+els.tabChef.addEventListener("click", () => activateTab("chef"));
 els.tabUpload.addEventListener("click", () => activateTab("upload"));
 els.tabWebcam.addEventListener("click", () => activateTab("webcam"));
 els.tabHistory.addEventListener("click", () => activateTab("history"));
@@ -170,6 +298,20 @@ els.refreshSuggestions.addEventListener("click", loadSuggestions);
 els.perishForm.addEventListener("submit", addPerishable);
 els.fridgeScanCta.addEventListener("click", () => activateTab("upload"));
 els.fridgeToggle.addEventListener("click", () => setFridgeItemsOpen(!fridgeItemsOpen));
+els.planBuild.addEventListener("click", loadPlan);
+els.chefForm.addEventListener("submit", askChef);
+els.nutriRefresh.addEventListener("click", refreshNutrition);
+els.barcodeForm.addEventListener("submit", lookupBarcode);
+els.barcodeScan.addEventListener("click", startBarcodeScan);
+els.barcodeStop.addEventListener("click", stopBarcodeScan);
+els.analyticsRefresh.addEventListener("click", loadAnalytics);
+els.wasteForm.addEventListener("submit", (e) => e.preventDefault());
+els.wasteUsed.addEventListener("click", () => logWaste("used"));
+els.wasteWasted.addEventListener("click", () => logWaste("wasted"));
+// The camera scanner is only offered where the browser can decode barcodes natively.
+if ("BarcodeDetector" in window) {
+  els.barcodeScan.hidden = false;
+}
 
 // --- Upload: drag & drop + file picker --------------------------------------
 els.dropzone.addEventListener("click", () => els.fileInput.click());
@@ -500,6 +642,10 @@ function renderFridge(scan) {
   // "As of" header line.
   els.fridgeAsof.textContent =
     `As of ${formatTimestamp(scan.created_at)} · ${sourceLabel(scan.source)}`;
+  // Signal when the view reflects meals marked cooked since the last scan.
+  if (scan.adjusted_for_consumption) {
+    els.fridgeAsof.textContent += " · adjusted after cooking";
+  }
 
   // Headline count (distinct entries, matching the History tab).
   const total = items.length;
@@ -824,6 +970,25 @@ function buildPerishRow(p) {
   date.textContent = `use by ${formatDate(p.use_by)}`;
   label.append(name, date);
 
+  // Quick actions: close the item out as eaten or thrown away (both log to the waste
+  // analytics and stop tracking it), plus the plain "stop tracking" ✕.
+  const actions = document.createElement("div");
+  actions.className = "perish-actions";
+
+  const used = document.createElement("button");
+  used.type = "button";
+  used.className = "perish-action perish-action-used";
+  used.setAttribute("aria-label", `Mark ${p.name} used`);
+  used.textContent = "✅ Used";
+  used.addEventListener("click", () => resolvePerishable(p, "used"));
+
+  const wasted = document.createElement("button");
+  wasted.type = "button";
+  wasted.className = "perish-action perish-action-wasted";
+  wasted.setAttribute("aria-label", `Mark ${p.name} wasted`);
+  wasted.textContent = "🗑️ Wasted";
+  wasted.addEventListener("click", () => resolvePerishable(p, "wasted"));
+
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "perish-remove";
@@ -831,8 +996,33 @@ function buildPerishRow(p) {
   remove.textContent = "✕";
   remove.addEventListener("click", () => deletePerishable(p.id));
 
-  row.append(label, remove);
+  actions.append(used, wasted, remove);
+  row.append(label, actions);
   return row;
+}
+
+// Close out a tracked perishable as used or wasted: logs it to the waste analytics and
+// stops tracking it, then refreshes the tracked list, suggestions, and (if loaded) analytics.
+async function resolvePerishable(perishable, event) {
+  hidePerishError();
+  try {
+    const response = await fetch(`/api/perishables/${perishable.id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event }),
+    });
+    if (!response.ok && response.status !== 404) {
+      const payload = await response.json().catch(() => null);
+      showPerishError((payload && payload.error) || "Couldn't update that item.");
+      return;
+    }
+    loadPerishables();
+    loadSuggestions();
+    // Reflect the new event on the Analytics tab if the user has opened it.
+    if (analyticsLoadedOnce) loadAnalytics();
+  } catch (_err) {
+    showPerishError("Couldn't reach the server to update that item.");
+  }
 }
 
 async function addPerishable(event) {
@@ -1073,6 +1263,915 @@ function formatDate(ymd) {
   return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+// --- Meal Plan (zero-waste optimizer) ---------------------------------------
+async function loadPlan() {
+  const days = parseInt(els.planDays.value, 10) || 3;
+  const mealsPerDay = parseInt(els.planMeals.value, 10) || 2;
+
+  els.planError.hidden = true;
+  els.planBody.hidden = true;
+  els.planLoading.hidden = false;
+  els.planBuild.disabled = true;
+
+  try {
+    const response = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days, meals_per_day: mealsPerDay }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.planError.textContent =
+        (payload && payload.error) || "Couldn't build a meal plan right now.";
+      els.planError.hidden = false;
+      return;
+    }
+    renderPlan(payload || {});
+  } catch (_err) {
+    els.planError.textContent = "Couldn't reach the server to build a meal plan.";
+    els.planError.hidden = false;
+  } finally {
+    els.planLoading.hidden = true;
+    els.planBuild.disabled = false;
+  }
+}
+
+function renderPlan(data) {
+  const plan = Array.isArray(data.plan) ? data.plan : [];
+  const metrics = data.metrics || {};
+  const notes = Array.isArray(data.notes) ? data.notes : [];
+  const shopping = Array.isArray(data.shopping_list) ? data.shopping_list : [];
+  const atRisk = Array.isArray(data.at_risk_remaining) ? data.at_risk_remaining : [];
+
+  // --- Metric tiles ---
+  els.planMetrics.innerHTML = "";
+  const solverLabel = data.solver === "ilp" ? "Exact optimizer" : "Fast heuristic";
+  els.planMetrics.appendChild(buildStat(solverLabel, "Solver", "plan-stat-solver"));
+  if (metrics.slots) {
+    els.planMetrics.appendChild(
+      buildStat(`${metrics.slots_filled ?? plan.length}/${metrics.slots}`, "Meals planned")
+    );
+  }
+  if (metrics.urgent_total) {
+    const pct = metrics.waste_avoided_pct;
+    els.planMetrics.appendChild(
+      buildStat(
+        `${metrics.urgent_used}/${metrics.urgent_total}`,
+        pct != null ? `At-risk used (${pct}%)` : "At-risk used",
+        "plan-stat-waste"
+      )
+    );
+  }
+  if (Number.isFinite(metrics.distinct_ingredients_used)) {
+    els.planMetrics.appendChild(
+      buildStat(String(metrics.distinct_ingredients_used), "Ingredients used")
+    );
+  }
+  if (Number.isFinite(metrics.new_ingredients_to_buy)) {
+    els.planMetrics.appendChild(
+      buildStat(String(metrics.new_ingredients_to_buy), "To buy")
+    );
+  }
+
+  // --- Notes ---
+  els.planNotes.innerHTML = "";
+  for (const note of notes) {
+    const p = document.createElement("p");
+    p.className = "plan-note";
+    p.textContent = note;
+    els.planNotes.appendChild(p);
+  }
+
+  // --- Meal cards / empty state ---
+  els.planMealsList.innerHTML = "";
+  els.planEmpty.hidden = plan.length > 0;
+  for (const meal of plan) {
+    els.planMealsList.appendChild(buildPlanMealCard(meal));
+  }
+
+  // --- Shopping list ---
+  els.planShopping.innerHTML = "";
+  els.planShoppingSection.hidden = shopping.length === 0;
+  els.planShoppingCount.textContent = String(shopping.length);
+  for (const s of shopping) {
+    els.planShopping.appendChild(buildPlanShoppingRow(s));
+  }
+
+  // --- Still at risk ---
+  els.planAtrisk.innerHTML = "";
+  els.planAtriskSection.hidden = atRisk.length === 0;
+  for (const row of atRisk) {
+    els.planAtrisk.appendChild(buildUseSoonRow(row));
+  }
+
+  // --- Nutrition (optional) ---
+  const nutrition = metrics.nutrition;
+  if (nutrition) {
+    els.planNutrition.innerHTML = "";
+    els.planNutrition.appendChild(buildStat(`${nutrition.kcal}`, "kcal"));
+    els.planNutrition.appendChild(buildStat(`${nutrition.protein_g} g`, "Protein"));
+    els.planNutrition.appendChild(buildStat(`${nutrition.carbs_g} g`, "Carbs"));
+    els.planNutrition.appendChild(buildStat(`${nutrition.fat_g} g`, "Fat"));
+    els.planNutritionBasis.textContent = nutrition.basis || "";
+    els.planNutritionSection.hidden = false;
+  } else {
+    els.planNutritionSection.hidden = true;
+  }
+
+  els.planBody.hidden = false;
+}
+
+// One "big number + label" tile for the metrics/nutrition strips.
+function buildStat(value, label, extraClass) {
+  const stat = document.createElement("div");
+  stat.className = `plan-stat${extraClass ? " " + extraClass : ""}`;
+  const val = document.createElement("div");
+  val.className = "plan-stat-value";
+  val.textContent = value;
+  const lab = document.createElement("div");
+  lab.className = "plan-stat-label muted small";
+  lab.textContent = label;
+  stat.append(val, lab);
+  return stat;
+}
+
+function buildPlanMealCard(meal) {
+  const card = document.createElement("div");
+  card.className = "card plan-meal-card";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("h3");
+  title.className = "card-name";
+  const slot = Number.isFinite(meal.slot) ? meal.slot : "";
+  title.textContent = slot ? `Meal ${slot}: ${meal.title || "Recipe"}` : (meal.title || "Recipe");
+  head.appendChild(title);
+  if (Number.isFinite(meal.time_min)) {
+    const time = document.createElement("span");
+    time.className = "recipe-time muted small";
+    time.textContent = `⏱ ${meal.time_min} min`;
+    head.appendChild(time);
+  }
+  card.appendChild(head);
+
+  // "Uses your …expiring" highlight — the zero-waste payoff, shown first.
+  if (Array.isArray(meal.uses_expiring) && meal.uses_expiring.length) {
+    const tags = document.createElement("div");
+    tags.className = "recipe-tags";
+    const uses = document.createElement("span");
+    uses.className = "recipe-tag recipe-tag-expiring";
+    uses.textContent = `Uses up ${meal.uses_expiring.join(", ")}`;
+    tags.appendChild(uses);
+    card.appendChild(tags);
+  }
+
+  if (Array.isArray(meal.uses) && meal.uses.length) {
+    card.appendChild(chipRow("Uses", meal.uses, "chip-have"));
+  }
+  if (Array.isArray(meal.to_buy) && meal.to_buy.length) {
+    card.appendChild(chipRow("Buy", meal.to_buy, "chip-need"));
+  }
+
+  // "Mark cooked" closes the loop: it consumes the on-hand ingredients (decrementing the
+  // fridge) and logs each as "used" for the Analytics tab. Only offered when the meal
+  // actually draws on inventory — a shopping-only meal has nothing to decrement.
+  if (Array.isArray(meal.uses) && meal.uses.length) {
+    const actions = document.createElement("div");
+    actions.className = "plan-meal-actions";
+
+    const cookBtn = document.createElement("button");
+    cookBtn.type = "button";
+    cookBtn.className = "btn-cook";
+    cookBtn.textContent = "🍳 Mark cooked";
+
+    const status = document.createElement("span");
+    status.className = "plan-cook-status muted small";
+    status.hidden = true;
+
+    cookBtn.addEventListener("click", () => cookMeal(meal, cookBtn, status));
+    actions.append(cookBtn, status);
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+
+// Mark a planned meal cooked: consume its on-hand ingredients (decrementing the fridge)
+// and log each as "used" so waste trends down. Closes plan → consumption → inventory.
+async function cookMeal(meal, button, status) {
+  const uses = Array.isArray(meal.uses)
+    ? meal.uses.filter((u) => u && String(u).trim())
+    : [];
+  if (!uses.length) return;
+
+  button.disabled = true;
+  button.textContent = "Cooking…";
+  status.hidden = true;
+  status.classList.remove("cook-error");
+
+  try {
+    const response = await fetch("/api/cook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uses, title: meal.title || "Recipe" }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      button.disabled = false;
+      button.textContent = "🍳 Mark cooked";
+      status.hidden = false;
+      status.classList.add("cook-error");
+      status.textContent = (payload && payload.error) || "Couldn't mark that cooked.";
+      return;
+    }
+
+    button.textContent = "✓ Cooked";
+    button.classList.add("btn-cook-done");
+    status.hidden = false;
+    const cleared = (payload && payload.cleared_perishables) || 0;
+    status.textContent = cleared
+      ? `Inventory updated · cleared ${cleared} at-risk item${cleared === 1 ? "" : "s"}.`
+      : "Inventory updated.";
+
+    // Reflect the decremented inventory and the new "used" events on other tabs.
+    loadFridge();
+    if (analyticsLoadedOnce) loadAnalytics();
+  } catch (_err) {
+    button.disabled = false;
+    button.textContent = "🍳 Mark cooked";
+    status.hidden = false;
+    status.classList.add("cook-error");
+    status.textContent = "Couldn't reach the server.";
+  }
+}
+
+function buildPlanShoppingRow(s) {
+  const row = document.createElement("div");
+  row.className = "shopping-row";
+
+  const item = document.createElement("span");
+  item.className = "shopping-item";
+  item.textContent = s.item;
+
+  const forRecipes = document.createElement("span");
+  forRecipes.className = "muted small";
+  const titles = Array.isArray(s.for_recipes) ? s.for_recipes : [];
+  forRecipes.textContent = titles.length ? `for ${titles.join(", ")}` : "";
+
+  row.append(item, forRecipes);
+  return row;
+}
+
+// --- Nutrition (Open Food Facts dashboard + barcode scanner) ----------------
+async function loadNutrition() {
+  els.nutriError.hidden = true;
+  els.nutriBody.hidden = true;
+  els.nutriLoading.hidden = false;
+
+  try {
+    const response = await fetch("/api/nutrition");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.nutriError.textContent =
+        (payload && payload.error) || "Couldn't load nutrition right now.";
+      els.nutriError.hidden = false;
+      return;
+    }
+    renderNutrition(payload || {});
+  } catch (_err) {
+    els.nutriError.textContent = "Couldn't reach the server to load nutrition.";
+    els.nutriError.hidden = false;
+  } finally {
+    els.nutriLoading.hidden = true;
+  }
+}
+
+function renderNutrition(data) {
+  const items = Array.isArray(data.items) ? data.items : [];
+  const totals = data.totals || {};
+  const coverage = data.coverage || {};
+  const tracked = Number.isFinite(coverage.tracked) ? coverage.tracked : items.length;
+  const withData = Number.isFinite(coverage.with_data) ? coverage.with_data : 0;
+
+  // --- Metric tiles: coverage first, then summed macros ---
+  els.nutriMetrics.innerHTML = "";
+  els.nutriMetrics.appendChild(
+    buildStat(`${withData}/${tracked}`, "Ingredients with data", "plan-stat-solver")
+  );
+  els.nutriMetrics.appendChild(buildStat(fmtNum(totals.kcal), "kcal"));
+  els.nutriMetrics.appendChild(buildStat(`${fmtNum(totals.protein_g)} g`, "Protein"));
+  els.nutriMetrics.appendChild(buildStat(`${fmtNum(totals.carbs_g)} g`, "Carbs"));
+  els.nutriMetrics.appendChild(buildStat(`${fmtNum(totals.fat_g)} g`, "Fat"));
+
+  // --- Per-ingredient table / empty state ---
+  els.nutriTable.innerHTML = "";
+  if (tracked === 0) {
+    els.nutriEmpty.hidden = false;
+    els.nutriTableSection.hidden = true;
+  } else {
+    els.nutriEmpty.hidden = true;
+    els.nutriCount.textContent = String(items.length);
+    // Header row, then one row per ingredient.
+    els.nutriTable.appendChild(buildNutriRow(
+      { name: "Ingredient", kcal: "kcal", protein_g: "Protein", carbs_g: "Carbs", fat_g: "Fat" },
+      { header: true }
+    ));
+    for (const item of items) els.nutriTable.appendChild(buildNutriRow(item));
+    els.nutriTableSection.hidden = false;
+  }
+
+  els.nutriBody.hidden = false;
+}
+
+// One row of the per-ingredient nutrition table. `header:true` renders the label row and
+// prints the given strings verbatim; data rows show macros or an em-dash when unknown.
+function buildNutriRow(item, opts = {}) {
+  const row = document.createElement("div");
+  row.className = `nutri-row${opts.header ? " nutri-row-head" : ""}`;
+
+  const name = document.createElement("span");
+  name.className = "nutri-cell nutri-cell-name";
+  name.textContent = item.name || "—";
+  row.appendChild(name);
+
+  const macros = opts.header
+    ? [item.kcal, item.protein_g, item.carbs_g, item.fat_g]
+    : [
+        fmtMacro(item.kcal),
+        fmtMacro(item.protein_g, "g"),
+        fmtMacro(item.carbs_g, "g"),
+        fmtMacro(item.fat_g, "g"),
+      ];
+  for (const value of macros) {
+    const cell = document.createElement("span");
+    cell.className = "nutri-cell nutri-cell-num";
+    cell.textContent = value;
+    row.appendChild(cell);
+  }
+  return row;
+}
+
+async function refreshNutrition() {
+  if (nutritionBusy) return;
+  nutritionBusy = true;
+  els.nutriRefresh.disabled = true;
+  const original = els.nutriRefresh.textContent;
+  els.nutriRefresh.textContent = "Refreshing…";
+  els.nutriError.hidden = true;
+
+  try {
+    const response = await fetch("/api/nutrition/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.nutriError.textContent =
+        (payload && payload.error) || "Couldn't refresh nutrition right now.";
+      els.nutriError.hidden = false;
+      return;
+    }
+    await loadNutrition();
+    showNutriSummary(payload || {});
+  } catch (_err) {
+    els.nutriError.textContent = "Couldn't reach the server to refresh nutrition.";
+    els.nutriError.hidden = false;
+  } finally {
+    nutritionBusy = false;
+    els.nutriRefresh.disabled = false;
+    els.nutriRefresh.textContent = original;
+  }
+}
+
+// Report what a refresh actually did, inline in the (green-styled) error banner slot.
+function showNutriSummary(summary) {
+  const updated = (summary.updated || []).length;
+  const cached = (summary.cached || []).length;
+  const notFound = (summary.not_found || []).length;
+  const failed = (summary.failed || []).length;
+  const parts = [];
+  if (updated) parts.push(`${updated} updated`);
+  if (cached) parts.push(`${cached} already had data`);
+  if (notFound) parts.push(`${notFound} not on Open Food Facts`);
+  if (failed) parts.push(`${failed} couldn't be fetched`);
+  els.nutriError.textContent = parts.length
+    ? `Refreshed: ${parts.join(" · ")}.`
+    : "Nothing to refresh — no ingredients on hand yet.";
+  els.nutriError.className = "error-banner nutri-notice";
+  els.nutriError.hidden = false;
+}
+
+// --- Barcode scanner --------------------------------------------------------
+async function lookupBarcode(event) {
+  if (event) event.preventDefault();
+  const code = (els.barcodeInput.value || "").replace(/\D/g, "");
+  hideBarcodeError();
+  if (code.length < 8 || code.length > 14) {
+    showBarcodeError("Enter a barcode of 8–14 digits.");
+    return;
+  }
+
+  els.barcodeLookup.disabled = true;
+  els.barcodeResult.hidden = true;
+
+  try {
+    const response = await fetch("/api/barcode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.status === 404) {
+      showBarcodeError("No product found for that barcode on Open Food Facts.");
+      return;
+    }
+    if (!response.ok) {
+      showBarcodeError((payload && payload.error) || "Couldn't look up that barcode.");
+      return;
+    }
+    renderBarcodeProduct(payload || {});
+    // A cached product may have added a nutrition row; refresh the dashboard if it's loaded.
+    if (nutritionLoadedOnce) loadNutrition();
+  } catch (_err) {
+    showBarcodeError("Couldn't reach the server to look up that barcode.");
+  } finally {
+    els.barcodeLookup.disabled = false;
+  }
+}
+
+function renderBarcodeProduct(data) {
+  const product = data.product || {};
+  els.barcodeResult.innerHTML = "";
+
+  const card = document.createElement("div");
+  card.className = "card barcode-card";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const name = document.createElement("h3");
+  name.className = "card-name";
+  name.textContent = product.name || "Product";
+  head.appendChild(name);
+  card.appendChild(head);
+
+  const meta = document.createElement("div");
+  meta.className = "card-meta";
+  if (product.brands) {
+    const brand = document.createElement("span");
+    brand.className = "chip";
+    brand.textContent = product.brands;
+    meta.appendChild(brand);
+  }
+  const codeChip = document.createElement("span");
+  codeChip.className = "chip";
+  codeChip.textContent = `#${product.code || ""}`;
+  meta.appendChild(codeChip);
+  card.appendChild(meta);
+
+  if (data.has_nutrition) {
+    const strip = document.createElement("div");
+    strip.className = "plan-nutrition";
+    strip.appendChild(buildStat(fmtNum(product.kcal), "kcal"));
+    strip.appendChild(buildStat(`${fmtNum(product.protein_g)} g`, "Protein"));
+    strip.appendChild(buildStat(`${fmtNum(product.carbs_g)} g`, "Carbs"));
+    strip.appendChild(buildStat(`${fmtNum(product.fat_g)} g`, "Fat"));
+    card.appendChild(strip);
+    const note = document.createElement("p");
+    note.className = "muted small";
+    note.textContent = data.cached
+      ? "Per 100 g. Saved to your nutrition data."
+      : "Per 100 g.";
+    card.appendChild(note);
+  } else {
+    const note = document.createElement("p");
+    note.className = "muted small";
+    note.textContent = "Open Food Facts has this product but no nutrition facts for it.";
+    card.appendChild(note);
+  }
+
+  els.barcodeResult.appendChild(card);
+  els.barcodeResult.hidden = false;
+}
+
+async function startBarcodeScan() {
+  hideBarcodeError();
+  if (!("BarcodeDetector" in window)) {
+    showBarcodeError("This browser can't scan barcodes — type the number instead.");
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showBarcodeError("No camera available — type the barcode instead.");
+    return;
+  }
+
+  let detector;
+  try {
+    detector = new window.BarcodeDetector({
+      formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"],
+    });
+  } catch (_err) {
+    showBarcodeError("Couldn't start the barcode scanner — type the number instead.");
+    return;
+  }
+
+  try {
+    barcodeStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false,
+    });
+  } catch (err) {
+    if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
+      showBarcodeError("Camera permission was denied — type the barcode instead.");
+    } else if (err && err.name === "NotFoundError") {
+      showBarcodeError("No camera was found — type the barcode instead.");
+    } else {
+      showBarcodeError("Couldn't start the camera — type the barcode instead.");
+    }
+    return;
+  }
+
+  els.barcodeVideo.srcObject = barcodeStream;
+  els.barcodeCamera.hidden = false;
+  els.barcodeScan.hidden = true;
+  els.barcodeStop.hidden = false;
+  barcodeScanning = true;
+
+  const tick = async () => {
+    if (!barcodeScanning) return;
+    try {
+      const codes = await detector.detect(els.barcodeVideo);
+      if (codes && codes.length && codes[0].rawValue) {
+        const value = codes[0].rawValue.replace(/\D/g, "");
+        if (value.length >= 8) {
+          els.barcodeInput.value = value;
+          stopBarcodeScan();
+          lookupBarcode();
+          return;
+        }
+      }
+    } catch (_err) {
+      // A transient decode error is fine; keep scanning until the user stops.
+    }
+    barcodeRaf = requestAnimationFrame(tick);
+  };
+  barcodeRaf = requestAnimationFrame(tick);
+}
+
+function stopBarcodeScan() {
+  barcodeScanning = false;
+  if (barcodeRaf) {
+    cancelAnimationFrame(barcodeRaf);
+    barcodeRaf = null;
+  }
+  if (barcodeStream) {
+    barcodeStream.getTracks().forEach((track) => track.stop());
+    barcodeStream = null;
+    els.barcodeVideo.srcObject = null;
+  }
+  els.barcodeCamera.hidden = true;
+  els.barcodeStop.hidden = true;
+  if ("BarcodeDetector" in window) els.barcodeScan.hidden = false;
+}
+
+function showBarcodeError(message) {
+  els.barcodeError.textContent = message;
+  els.barcodeError.hidden = false;
+}
+
+function hideBarcodeError() {
+  els.barcodeError.hidden = true;
+  els.barcodeError.textContent = "";
+}
+
+// Format an optional number for a metric tile: one decimal, or a dash when unknown.
+function fmtNum(value) {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
+  const n = Number(value);
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+// Format an optional macro for a table cell, with an optional unit suffix.
+function fmtMacro(value, unit) {
+  if (value == null || value === "" || !Number.isFinite(Number(value))) return "—";
+  const n = Number(value);
+  const text = Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return unit ? `${text} ${unit}` : text;
+}
+
+// --- Analytics (waste & spend dashboard) ------------------------------------
+async function loadAnalytics() {
+  els.analyticsError.hidden = true;
+  els.analyticsBody.hidden = true;
+  els.analyticsLoading.hidden = false;
+
+  try {
+    const response = await fetch("/api/analytics");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.analyticsError.textContent =
+        (payload && payload.error) || "Couldn't load your analytics right now.";
+      els.analyticsError.hidden = false;
+      return;
+    }
+    renderAnalytics(payload || {});
+  } catch (_err) {
+    els.analyticsError.textContent = "Couldn't reach the server to load your analytics.";
+    els.analyticsError.hidden = false;
+  } finally {
+    els.analyticsLoading.hidden = true;
+  }
+}
+
+function renderAnalytics(data) {
+  const totals = data.totals || {};
+  const money = data.money || {};
+  const topWasted = Array.isArray(data.top_wasted) ? data.top_wasted : [];
+  const byWeek = Array.isArray(data.by_week) ? data.by_week : [];
+  const hasData = !!data.has_data;
+
+  els.analyticsHeadline.textContent = data.headline || "";
+
+  // --- Metric tiles ---
+  els.analyticsMetrics.innerHTML = "";
+  els.analyticsMetrics.appendChild(
+    buildStat(String(totals.events || 0), "Items logged", "plan-stat-solver")
+  );
+  els.analyticsMetrics.appendChild(buildStat(String(totals.used || 0), "Used"));
+  els.analyticsMetrics.appendChild(
+    buildStat(String(totals.wasted || 0), "Wasted", "plan-stat-waste")
+  );
+  els.analyticsMetrics.appendChild(
+    buildStat(`${fmtNum(data.waste_rate)}%`, "Waste rate", "plan-stat-waste")
+  );
+  if (money.has_cost) {
+    els.analyticsMetrics.appendChild(buildStat(fmtNum(money.wasted), "Value wasted", "plan-stat-waste"));
+    els.analyticsMetrics.appendChild(buildStat(fmtNum(money.saved), "Value used"));
+  }
+
+  // --- Empty state vs charts ---
+  els.analyticsEmpty.hidden = hasData;
+
+  // Weekly trend.
+  els.analyticsTrend.innerHTML = "";
+  if (hasData) {
+    els.analyticsTrend.appendChild(buildTrendChart(byWeek));
+    els.analyticsTrendSection.hidden = false;
+  } else {
+    els.analyticsTrendSection.hidden = true;
+  }
+
+  // Most wasted.
+  els.analyticsTop.innerHTML = "";
+  if (topWasted.length) {
+    els.analyticsTopCount.textContent = String(topWasted.length);
+    for (const item of topWasted) {
+      els.analyticsTop.appendChild(buildTopWastedRow(item, money.has_cost));
+    }
+    els.analyticsTopSection.hidden = false;
+  } else {
+    els.analyticsTopSection.hidden = true;
+  }
+
+  els.analyticsBody.hidden = false;
+}
+
+// A small stacked-bar chart: one column per week, used (green) below wasted (red), heights
+// scaled to the busiest week. Legend-free — each bar carries a descriptive tooltip.
+function buildTrendChart(byWeek) {
+  const chart = document.createElement("div");
+  chart.className = "trend-chart";
+  const maxTotal = Math.max(1, ...byWeek.map((w) => (w.used || 0) + (w.wasted || 0)));
+
+  for (const week of byWeek) {
+    const used = week.used || 0;
+    const wasted = week.wasted || 0;
+
+    const col = document.createElement("div");
+    col.className = "trend-col";
+
+    const bar = document.createElement("div");
+    bar.className = "trend-bar";
+    bar.title = `Week of ${formatDate(week.week_start)}: ${used} used · ${wasted} wasted`;
+
+    const usedSeg = document.createElement("div");
+    usedSeg.className = "trend-seg trend-seg-used";
+    usedSeg.style.height = `${(used / maxTotal) * 100}%`;
+    const wastedSeg = document.createElement("div");
+    wastedSeg.className = "trend-seg trend-seg-wasted";
+    wastedSeg.style.height = `${(wasted / maxTotal) * 100}%`;
+    // column-reverse stacking: used sits at the bottom, wasted on top.
+    bar.append(usedSeg, wastedSeg);
+
+    const label = document.createElement("span");
+    label.className = "trend-label muted small";
+    label.textContent = formatWeekLabel(week.week_start);
+
+    col.append(bar, label);
+    chart.appendChild(col);
+  }
+  return chart;
+}
+
+function buildTopWastedRow(item, hasCost) {
+  const row = document.createElement("div");
+  row.className = "top-wasted-row";
+
+  const name = document.createElement("span");
+  name.className = "top-wasted-name";
+  name.textContent = item.name || item.token || "—";
+
+  const count = document.createElement("span");
+  count.className = "badge badge-spoiled";
+  const n = item.wasted || 0;
+  count.textContent = `${n}×`;
+
+  row.append(name, count);
+
+  if (hasCost && Number.isFinite(Number(item.cost)) && Number(item.cost) > 0) {
+    const cost = document.createElement("span");
+    cost.className = "muted small top-wasted-cost";
+    cost.textContent = fmtNum(item.cost);
+    row.appendChild(cost);
+  }
+  return row;
+}
+
+// Manually log a used/wasted item that wasn't a tracked perishable.
+async function logWaste(event) {
+  if (wasteBusy) return;
+  hideWasteError();
+  const name = els.wasteName.value.trim();
+  const costRaw = els.wasteCost.value.trim();
+  if (!name) {
+    showWasteError("Enter what the item is.");
+    return;
+  }
+  const body = { name, event };
+  if (costRaw !== "") {
+    const cost = Number(costRaw);
+    if (!Number.isFinite(cost) || cost < 0) {
+      showWasteError("Enter a cost as a non-negative number, or leave it blank.");
+      return;
+    }
+    body.est_cost = cost;
+  }
+
+  wasteBusy = true;
+  els.wasteUsed.disabled = true;
+  els.wasteWasted.disabled = true;
+
+  try {
+    const response = await fetch("/api/waste", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showWasteError((payload && payload.error) || "Couldn't save that right now.");
+      return;
+    }
+    els.wasteForm.reset();
+    els.wasteName.focus();
+    showWasteNotice(`Logged “${name}” as ${event}.`);
+    loadAnalytics();
+  } catch (_err) {
+    showWasteError("Couldn't reach the server to save that.");
+  } finally {
+    wasteBusy = false;
+    els.wasteUsed.disabled = false;
+    els.wasteWasted.disabled = false;
+  }
+}
+
+function showWasteNotice(message) {
+  els.wasteNotice.textContent = message;
+  els.wasteNotice.hidden = false;
+}
+
+function showWasteError(message) {
+  els.wasteNotice.hidden = true;
+  els.wasteError.textContent = message;
+  els.wasteError.hidden = false;
+}
+
+function hideWasteError() {
+  els.wasteError.hidden = true;
+  els.wasteError.textContent = "";
+  els.wasteNotice.hidden = true;
+}
+
+// A compact week label for the trend chart's x-axis, e.g. "Sep 15".
+function formatWeekLabel(ymd) {
+  if (!ymd) return "";
+  const parts = String(ymd).split("-");
+  if (parts.length !== 3) return ymd;
+  const [y, m, d] = parts.map((n) => parseInt(n, 10));
+  const date = new Date(y, m - 1, d);
+  if (isNaN(date.getTime())) return ymd;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// --- Chef (tool-using agent) ------------------------------------------------
+async function askChef(event) {
+  event.preventDefault();
+  const message = els.chefInput.value.trim();
+  if (!message || chefBusy) return;
+
+  els.chefError.hidden = true;
+  if (els.chefIntro) els.chefIntro.hidden = true;
+
+  appendChefBubble("user", message);
+  els.chefInput.value = "";
+  chefBusy = true;
+  els.chefSend.disabled = true;
+  els.chefInput.disabled = true;
+
+  const pending = appendChefPending();
+  const historyToSend = chefHistory.slice();
+
+  try {
+    const response = await fetch("/api/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history: historyToSend }),
+    });
+    const payload = await response.json().catch(() => null);
+    pending.remove();
+
+    if (!response.ok) {
+      const msg = (payload && payload.error) || `The Chef returned an error (HTTP ${response.status}).`;
+      // 503 = not configured on the server; show it inline rather than as a hard failure.
+      els.chefError.textContent = msg;
+      els.chefError.hidden = false;
+      return;
+    }
+
+    const answer = (payload && payload.answer) || "(no answer)";
+    appendChefBubble("assistant", answer, payload && payload.steps, payload && payload.model);
+
+    // Keep a bounded running transcript for follow-up context.
+    chefHistory.push({ role: "user", content: message });
+    chefHistory.push({ role: "assistant", content: answer });
+    while (chefHistory.length > 10) chefHistory.shift();
+  } catch (_err) {
+    pending.remove();
+    els.chefError.textContent = "Couldn't reach the server to ask the Chef.";
+    els.chefError.hidden = false;
+  } finally {
+    chefBusy = false;
+    els.chefSend.disabled = false;
+    els.chefInput.disabled = false;
+    els.chefInput.focus();
+  }
+}
+
+function appendChefBubble(role, text, steps, model) {
+  const bubble = document.createElement("div");
+  bubble.className = `chef-msg chef-msg-${role}`;
+
+  const body = document.createElement("p");
+  body.className = "chef-msg-text";
+  body.textContent = text;
+  bubble.appendChild(body);
+
+  // For the assistant, expose which tools it called (transparency), collapsed by default.
+  if (role === "assistant" && Array.isArray(steps) && steps.length) {
+    const details = document.createElement("details");
+    details.className = "chef-steps";
+    const summary = document.createElement("summary");
+    const toolNames = steps.map((s) => s.tool).filter(Boolean);
+    summary.textContent = `Used ${toolNames.length} tool${toolNames.length === 1 ? "" : "s"}${model ? " · " + model : ""}`;
+    details.appendChild(summary);
+    for (const step of steps) {
+      const line = document.createElement("div");
+      line.className = "chef-step muted small";
+      line.textContent = `${step.tool}(${step.arguments ? JSON.stringify(step.arguments) : ""})`;
+      details.appendChild(line);
+    }
+    bubble.appendChild(details);
+  }
+
+  els.chefLog.appendChild(bubble);
+  els.chefLog.scrollTop = els.chefLog.scrollHeight;
+  return bubble;
+}
+
+function appendChefPending() {
+  const bubble = document.createElement("div");
+  bubble.className = "chef-msg chef-msg-assistant chef-msg-pending";
+  const spinner = document.createElement("span");
+  spinner.className = "spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.textContent = "The Chef is thinking…";
+  bubble.append(spinner, label);
+  els.chefLog.appendChild(bubble);
+  els.chefLog.scrollTop = els.chefLog.scrollHeight;
+  return bubble;
+}
+
 // --- UI helpers -------------------------------------------------------------
 function setLoading(isLoading) {
   els.loading.hidden = !isLoading;
@@ -1103,8 +2202,11 @@ function releaseObjectUrl() {
   }
 }
 
-// Release the camera if the user navigates away.
-window.addEventListener("pagehide", stopCamera);
+// Release any camera if the user navigates away.
+window.addEventListener("pagehide", () => {
+  stopCamera();
+  stopBarcodeScan();
+});
 
 // The Fridge tab is the home view: load the current inventory on startup.
 activateTab("fridge");

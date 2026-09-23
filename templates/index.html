@@ -23,6 +23,18 @@
         <button id="tab-suggestions" class="tab" role="tab" aria-selected="false" aria-controls="panel-suggestions">
           Suggestions
         </button>
+        <button id="tab-plan" class="tab" role="tab" aria-selected="false" aria-controls="panel-plan">
+          Meal Plan
+        </button>
+        <button id="tab-nutrition" class="tab" role="tab" aria-selected="false" aria-controls="panel-nutrition">
+          Nutrition
+        </button>
+        <button id="tab-analytics" class="tab" role="tab" aria-selected="false" aria-controls="panel-analytics">
+          Analytics
+        </button>
+        <button id="tab-chef" class="tab" role="tab" aria-selected="false" aria-controls="panel-chef">
+          Chef
+        </button>
         <button id="tab-upload" class="tab" role="tab" aria-selected="false" aria-controls="panel-upload">
           Upload
         </button>
@@ -110,6 +122,180 @@
 
           <p id="suggest-ml" class="muted small suggest-ml"></p>
         </div>
+      </div>
+
+      <!-- Meal Plan panel: a zero-waste plan for the next few days, solved as an integer
+           program (optimizer.py) — which dishes to cook so the least food is wasted and the
+           least has to be bought, respecting per-ingredient stock as a scarce resource. -->
+      <div id="panel-plan" class="tab-panel" role="tabpanel" aria-labelledby="tab-plan" hidden>
+        <div class="plan-head">
+          <p class="muted small">A zero-waste plan that picks dishes to use up what's expiring first — solved as an optimization over your actual stock, not just a ranked list.</p>
+          <div class="plan-controls">
+            <label class="plan-field">Days
+              <select id="plan-days" class="plan-select" aria-label="Days to plan">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+              </select>
+            </label>
+            <label class="plan-field">Meals/day
+              <select id="plan-meals" class="plan-select" aria-label="Meals per day">
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <button id="plan-build" class="btn btn-primary" type="button">Build plan</button>
+          </div>
+        </div>
+
+        <div id="plan-loading" class="loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Optimizing your meal plan…</span>
+        </div>
+        <p id="plan-error" class="error-banner" role="alert" hidden></p>
+
+        <div id="plan-body" hidden>
+          <div id="plan-metrics" class="plan-metrics"></div>
+          <div id="plan-notes" class="plan-notes"></div>
+          <p id="plan-empty" class="muted" hidden>No cookable plan yet — scan your fridge (or add a few tracked items) and build again.</p>
+          <div id="plan-meals-list" class="plan-meals-list"></div>
+
+          <div id="plan-shopping-section" class="plan-section" hidden>
+            <h3 class="section-title">Shopping list <span id="plan-shopping-count" class="count-pill"></span></h3>
+            <p class="muted small">Buy these once — each is reused across every dish that needs it.</p>
+            <div id="plan-shopping" class="shopping-list"></div>
+          </div>
+
+          <div id="plan-atrisk-section" class="plan-section" hidden>
+            <h3 class="section-title">Still at risk</h3>
+            <p class="muted small">No dish in this plan uses these up — eat them fresh or freeze them.</p>
+            <div id="plan-atrisk" class="use-soon-list"></div>
+          </div>
+
+          <div id="plan-nutrition-section" class="plan-section" hidden>
+            <h3 class="section-title">Estimated nutrition</h3>
+            <div id="plan-nutrition" class="plan-nutrition"></div>
+            <p id="plan-nutrition-basis" class="muted small"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Nutrition panel: a dashboard of real per-100 g macros for what's in the fridge,
+           pulled from Open Food Facts (nutrition.py) and cached, plus a barcode scanner for
+           packaged goods. The same cached rows feed the meal-plan nutrition summary. -->
+      <div id="panel-nutrition" class="tab-panel" role="tabpanel" aria-labelledby="tab-nutrition" hidden>
+        <div class="nutri-head">
+          <p class="muted small">Real nutrition for what you have, from <strong>Open Food Facts</strong> — a free, open food database. Figures are per 100&nbsp;g and cached, so they also power the meal plan's nutrition estimate.</p>
+          <button id="nutri-refresh" class="btn btn-primary" type="button">Refresh from Open Food Facts</button>
+        </div>
+
+        <!-- Barcode scanner: look up a packaged product by its barcode. Uses the browser's
+             BarcodeDetector when available, with manual entry as a always-present fallback. -->
+        <div class="barcode-box">
+          <h3 class="section-title">Scan a packaged product</h3>
+          <p class="muted small">Point your camera at a barcode, or type the number. We look it up on Open Food Facts and cache its nutrition.</p>
+          <form id="barcode-form" class="barcode-form">
+            <input id="barcode-input" class="barcode-input" type="text" inputmode="numeric"
+                   pattern="[0-9]*" maxlength="14" placeholder="e.g. 3017620422003"
+                   autocomplete="off" aria-label="Barcode number" />
+            <button id="barcode-lookup" class="btn btn-secondary" type="submit">Look up</button>
+            <button id="barcode-scan" class="btn btn-secondary" type="button" hidden>📷 Scan</button>
+            <button id="barcode-stop" class="btn btn-ghost" type="button" hidden>Stop</button>
+          </form>
+          <div id="barcode-camera" class="barcode-camera" hidden>
+            <video id="barcode-video" playsinline autoplay muted></video>
+            <p class="muted small">Hold the barcode steady in view…</p>
+          </div>
+          <p id="barcode-error" class="error-banner" role="alert" hidden></p>
+          <div id="barcode-result" class="barcode-result" hidden></div>
+        </div>
+
+        <div id="nutri-loading" class="loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading nutrition…</span>
+        </div>
+        <p id="nutri-error" class="error-banner" role="alert" hidden></p>
+
+        <div id="nutri-body" hidden>
+          <div id="nutri-metrics" class="plan-metrics"></div>
+          <p id="nutri-empty" class="muted" hidden>Scan your fridge (or add a few tracked items), then refresh to pull nutrition for what's on hand.</p>
+          <div id="nutri-table-section" class="nutri-section" hidden>
+            <h3 class="section-title">Per ingredient <span id="nutri-count" class="count-pill"></span></h3>
+            <p class="muted small">Per 100&nbsp;g. “Refresh from Open Food Facts” fills in anything still missing.</p>
+            <div id="nutri-table" class="nutri-table"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analytics panel: turns the waste log (storage.waste_log, populated when the user
+           marks tracked items "used" or "wasted") into a dashboard — waste rate, money lost
+           vs rescued, most-wasted ingredients, and a weekly trend (analytics.summarize). -->
+      <div id="panel-analytics" class="tab-panel" role="tabpanel" aria-labelledby="tab-analytics" hidden>
+        <div class="analytics-head">
+          <p class="muted small">See how much food you actually use versus throw away. Mark tracked items <strong>Used</strong> or <strong>Wasted</strong> on the Suggestions tab — or log one below — and it all rolls up here.</p>
+          <button id="analytics-refresh" class="btn btn-secondary" type="button">Refresh</button>
+        </div>
+
+        <!-- Manual log: record a used/wasted item that wasn't a tracked perishable. -->
+        <div class="waste-logger">
+          <h3 class="section-title">Log an item</h3>
+          <p class="muted small">Ate something before it spoiled, or had to bin it? Record it here. Cost is optional — add it to track money.</p>
+          <form id="waste-form" class="waste-form">
+            <input id="waste-name" class="waste-input" type="text" placeholder="e.g. Spinach" maxlength="80" autocomplete="off" aria-label="Item name" required />
+            <input id="waste-cost" class="waste-input waste-cost" type="number" min="0" step="0.01" placeholder="Cost (optional)" autocomplete="off" aria-label="Estimated cost" />
+            <button id="waste-used" class="btn btn-primary" type="button" data-event="used">✅ Used</button>
+            <button id="waste-wasted" class="btn btn-secondary" type="button" data-event="wasted">🗑️ Wasted</button>
+          </form>
+          <p id="waste-error" class="error-banner" role="alert" hidden></p>
+          <p id="waste-notice" class="nutri-notice" role="status" hidden></p>
+        </div>
+
+        <div id="analytics-loading" class="loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading analytics…</span>
+        </div>
+        <p id="analytics-error" class="error-banner" role="alert" hidden></p>
+
+        <div id="analytics-body" hidden>
+          <p id="analytics-headline" class="analytics-headline"></p>
+          <div id="analytics-metrics" class="plan-metrics"></div>
+          <p id="analytics-empty" class="muted" hidden>Nothing logged yet. Mark a tracked item used or wasted — or use “Log an item” above — to start seeing your trends.</p>
+
+          <div id="analytics-trend-section" class="analytics-section" hidden>
+            <h3 class="section-title">Weekly trend</h3>
+            <p class="muted small">Used vs wasted items per week, most recent on the right.</p>
+            <div id="analytics-trend" class="trend-chart"></div>
+          </div>
+
+          <div id="analytics-top-section" class="analytics-section" hidden>
+            <h3 class="section-title">Most wasted <span id="analytics-top-count" class="count-pill"></span></h3>
+            <div id="analytics-top" class="top-wasted-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chef panel: a tool-using agent (agent.py) that answers cooking questions by
+           calling the inventory / recommender / optimizer tools itself. Degrades to a
+           friendly "not configured" state when no chat model is set on the server. -->
+      <div id="panel-chef" class="tab-panel" role="tabpanel" aria-labelledby="tab-chef" hidden>
+        <div class="chef-head">
+          <p class="muted small">Ask the Chef what to cook. It reads your fridge, ranks recipes, and can plan meals for you — then explains its answer.</p>
+        </div>
+        <div id="chef-log" class="chef-log" aria-live="polite">
+          <p id="chef-intro" class="muted small">Try: “What can I cook tonight?” · “Plan 2 days of dinners.” · “What should I use up first?”</p>
+        </div>
+        <p id="chef-error" class="error-banner" role="alert" hidden></p>
+        <form id="chef-form" class="chef-form">
+          <input id="chef-input" class="chef-input" type="text" maxlength="1000"
+                 placeholder="Ask the Chef…" autocomplete="off" aria-label="Message the Chef" />
+          <button id="chef-send" class="btn btn-primary" type="submit">Ask</button>
+        </form>
       </div>
 
       <!-- Upload panel -->

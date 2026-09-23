@@ -49,7 +49,7 @@ SEED = 1234             # fixes initialization so results are reproducible
 
 def load_recipe_ingredients(path: str = RECIPES_PATH) -> list[list[str]]:
     """Return each recipe's ingredient list (as token lists) from the recipe corpus."""
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     recipes = data.get("recipes", [])
     return [

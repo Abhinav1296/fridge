@@ -4,3 +4,4 @@ python-dotenv>=1.0,<2.0
 Pillow>=10.0,<12.0
 libsql-client>=0.3,<0.4  # SQLite-compatible client; talks to a local file in dev and to Turso in the cloud
 gunicorn>=21.0,<24.0     # WSGI server for self-hosting; unused by Vercel
+pulp>=2.7,<3.0           # ILP solver for the zero-waste meal planner; optional — optimizer.py falls back to a pure-Python heuristic if absent

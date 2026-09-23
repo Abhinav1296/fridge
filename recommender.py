@@ -35,7 +35,7 @@ import logging
 import math
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ def _load_recipes() -> list[dict[str, Any]]:
     global _recipes_cache
     if _recipes_cache is None:
         path = _data_path("RECIPES_PATH", "recipes.json")
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
         _recipes_cache = [r for r in data.get("recipes", []) if r.get("ingredients")]
         logger.info("Loaded %d recipes from %s", len(_recipes_cache), path)
@@ -105,7 +105,7 @@ def _load_aliases() -> dict[str, str]:
     if _aliases_cache is None:
         path = _data_path("INGREDIENT_ALIASES_PATH", "ingredient_aliases.json")
         try:
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
             _aliases_cache = {k.lower(): v for k, v in data.get("aliases", {}).items()}
         except (OSError, ValueError):
@@ -120,7 +120,7 @@ def _load_embeddings() -> dict[str, Any]:
     if _embeddings_cache is None:
         path = _data_path("INGREDIENT_EMBEDDINGS_PATH", "ingredient_embeddings.json")
         try:
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
             _embeddings_cache = {
                 "dim": int(data.get("dim", 0)),
@@ -256,7 +256,7 @@ def recommend(
     """
     inventory_items = inventory_items or []
     perishables = perishables or []
-    today = (now or datetime.now(timezone.utc)).date()
+    today = (now or datetime.now(UTC)).date()
 
     embeddings = _load_embeddings()
     vectors = embeddings["vectors"]
