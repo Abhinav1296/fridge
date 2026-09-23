@@ -30,6 +30,7 @@ numpy at runtime), which keeps the deployed app lightweight.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import math
@@ -86,7 +87,10 @@ _embeddings_cache: dict[str, Any] | None = None
 def reset_cache() -> None:
     """Drop cached data files so the next call reloads them (used by tests)."""
     global _recipes_cache, _aliases_cache, _embeddings_cache
+    global _KNOWN_TOKENS_CACHE, _RESOLVABLE_CACHE, _FUZZY_INDEX_CACHE
     _recipes_cache = _aliases_cache = _embeddings_cache = None
+    # Derived normalization caches depend on the above, so drop them together.
+    _KNOWN_TOKENS_CACHE = _RESOLVABLE_CACHE = _FUZZY_INDEX_CACHE = None
 
 
 def _load_recipes() -> list[dict[str, Any]]:
@@ -142,6 +146,28 @@ def _load_embeddings() -> dict[str, Any]:
 # --- Ingredient name normalization ------------------------------------------
 
 _KNOWN_TOKENS_CACHE: set[str] | None = None
+_RESOLVABLE_CACHE: set[str] | None = None
+_FUZZY_INDEX_CACHE: dict[str, str] | None = None
+
+# Words that qualify an ingredient without changing its identity (state, size, cut,
+# form) plus a few grocery brands a photo or user might include. Stripped from either
+# end of a multi-word name when doing so lands on a recognised ingredient, e.g.
+# "fresh ginger"→ginger, "boiled egg"→egg, "amul butter"→butter, "full cream milk"→milk.
+_DESCRIPTORS = frozenset({
+    "fresh", "frozen", "dried", "raw", "ripe", "boiled", "cooked", "roasted",
+    "ground", "whole", "chopped", "minced", "grated", "shredded", "sliced",
+    "diced", "cubed", "cubes", "cube", "powdered", "crushed", "peeled", "washed",
+    "large", "small", "medium", "big", "extra", "full", "cream", "skimmed",
+    "unsalted", "salted", "plain", "greek", "baby", "organic", "pure", "canned",
+    "tinned", "packet", "pack", "of",
+    # common grocery brands (kept short and unambiguous)
+    "amul", "nestle", "britannia", "verka", "nandini", "gowardhan",
+})
+
+# Similarity threshold for the last-resort typo snap. High enough to avoid mapping a
+# genuinely new ingredient onto an unrelated token, low enough to catch real typos
+# ("panner"→paneer ≈ 0.83, "corriander"→coriander ≈ 0.95).
+_FUZZY_CUTOFF = 0.82
 
 
 def _known_tokens() -> set[str]:
@@ -155,33 +181,107 @@ def _known_tokens() -> set[str]:
     return _KNOWN_TOKENS_CACHE
 
 
+def _resolvable_tokens() -> set[str]:
+    """Tokens we are willing to resolve onto: app recipe tokens, alias targets, and the
+    full trained embedding vocabulary. Extending past the ~49 recipe tokens to the whole
+    embedding vocab means normalization lands on a token that actually has a vector."""
+    global _RESOLVABLE_CACHE
+    if _RESOLVABLE_CACHE is None:
+        tokens = set(_known_tokens())
+        tokens.update(_load_aliases().values())
+        tokens.update(_load_embeddings()["vectors"])
+        _RESOLVABLE_CACHE = tokens
+    return _RESOLVABLE_CACHE
+
+
+def _fuzzy_index() -> dict[str, str]:
+    """Map a space-form search string → canonical token, used only for typo snapping.
+    Every resolvable token contributes its space form; alias keys contribute too so a
+    misspelled synonym ("grean chilli") can still snap to its canonical target."""
+    global _FUZZY_INDEX_CACHE
+    if _FUZZY_INDEX_CACHE is None:
+        index: dict[str, str] = {}
+        for token in _resolvable_tokens():
+            index.setdefault(token.replace("_", " "), token)
+        for key, value in _load_aliases().items():
+            index.setdefault(key, value)
+        _FUZZY_INDEX_CACHE = index
+    return _FUZZY_INDEX_CACHE
+
+
+def _resolve(text: str) -> str | None:
+    """Alias / direct-token / de-pluralization lookup. Returns a canonical token, or None
+    if the text is not recognised. Plurals and direct hits are checked against the full
+    resolvable vocab, not just the recipe tokens."""
+    aliases = _load_aliases()
+    if text in aliases:
+        return aliases[text]
+    resolvable = _resolvable_tokens()
+    token = text.replace(" ", "_")
+    if token in resolvable:
+        return token
+    if text.endswith("es") and text[:-2] in aliases:
+        return aliases[text[:-2]]
+    singulars = [text[:-1], text[:-2]]
+    if text.endswith("ies"):
+        singulars.append(text[:-3] + "y")
+    for singular in singulars:
+        if not singular:
+            continue
+        if singular in aliases:
+            return aliases[singular]
+        if singular.replace(" ", "_") in resolvable:
+            return singular.replace(" ", "_")
+    return None
+
+
+def _strip_descriptors(cleaned: str) -> str:
+    """Drop leading/trailing qualifier and brand words, always keeping ≥1 core word."""
+    words = cleaned.split()
+    while len(words) > 1 and words[0] in _DESCRIPTORS:
+        words = words[1:]
+    while len(words) > 1 and words[-1] in _DESCRIPTORS:
+        words = words[:-1]
+    return " ".join(words)
+
+
+def _fuzzy_snap(text: str) -> str | None:
+    """Last-resort: snap a likely typo onto the closest known ingredient string. Returns
+    the canonical token or None if nothing is within :data:`_FUZZY_CUTOFF`."""
+    match = difflib.get_close_matches(text, _fuzzy_index(), n=1, cutoff=_FUZZY_CUTOFF)
+    return _fuzzy_index()[match[0]] if match else None
+
+
 def normalize_ingredient(name: str) -> str:
     """Map a free-text ingredient name to a canonical recipe token.
 
-    Order: lower/trim → alias lookup → collapse spaces to underscores → simple
-    de-pluralization when it lands on a known token. Anything unrecognized is returned
-    in a cleaned canonical form so it can still be displayed and compared consistently.
+    Order: lower/trim → alias / direct-token / de-pluralization → strip qualifier & brand
+    words ("fresh ginger"→ginger) → fuzzy-snap obvious typos ("panner"→paneer). Anything
+    still unrecognised is returned in a cleaned canonical form so it can still be displayed
+    and compared consistently. Every recognition step is additive: a name that already
+    resolves is returned unchanged from the earlier, cheaper step.
     """
     cleaned = re.sub(r"\s+", " ", str(name or "").strip().lower())
     if not cleaned:
         return ""
 
-    aliases = _load_aliases()
-    if cleaned in aliases:
-        return aliases[cleaned]
+    resolved = _resolve(cleaned)
+    if resolved is not None:
+        return resolved
 
-    token = cleaned.replace(" ", "_")
-    known = _known_tokens()
-    if token in known:
-        return token
+    core = _strip_descriptors(cleaned)
+    if core != cleaned:
+        resolved = _resolve(core)
+        if resolved is not None:
+            return resolved
 
-    # Simple plural → singular ("tomatoes"/"onions" → "tomato"/"onion") when it helps.
-    if cleaned.endswith("es") and cleaned[:-2] in aliases:
-        return aliases[cleaned[:-2]]
-    for singular in (cleaned[:-1], cleaned[:-2], cleaned[:-3] + "y" if cleaned.endswith("ies") else ""):
-        if singular and singular.replace(" ", "_") in known:
-            return singular.replace(" ", "_")
-    return token
+    snapped = _fuzzy_snap(cleaned)
+    if snapped is None and core != cleaned:
+        snapped = _fuzzy_snap(core)
+    if snapped is not None:
+        return snapped
+
+    return (core or cleaned).replace(" ", "_")
 
 
 def _prettify(token: str) -> str:

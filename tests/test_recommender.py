@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 import recommender
 
 
@@ -16,6 +18,48 @@ def test_normalize_ingredient_maps_aliases():
     assert recommender.normalize_ingredient("Curd") == "yogurt"
     # Plain names normalize to a lowercased token regardless of casing/whitespace.
     assert recommender.normalize_ingredient("  Tomato ") == "tomato"
+
+
+# Realistic messy inputs a user or the vision model might emit: regional names, typos,
+# and brand/qualifier noise. These lock in the normalization robustness layer (aliases +
+# descriptor strip + fuzzy snap) so the app keeps landing on a token that has a vector.
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # regional / synonym aliases
+        ("pyaaz", "onion"),
+        ("dhaniya", "coriander"),
+        ("aloo", "potato"),
+        ("doodh", "milk"),
+        ("jeera", "cumin"),
+        ("haldi", "turmeric"),
+        ("shimla mirch", "capsicum"),
+        ("beaten rice", "poha"),
+        # descriptor / brand stripping
+        ("fresh ginger", "ginger"),
+        ("boiled egg", "egg"),
+        ("amul butter", "butter"),
+        ("full cream milk", "milk"),
+        ("paneer cubes", "paneer"),
+        # typo fuzzy-snap
+        ("corriander", "coriander"),
+        ("panner", "paneer"),
+        ("capsicm", "capsicum"),
+        ("buttr", "butter"),
+        ("grean chilli", "green_chili"),
+    ],
+)
+def test_normalize_ingredient_is_robust_to_messy_input(raw, expected):
+    assert recommender.normalize_ingredient(raw) == expected
+
+
+def test_normalize_ingredient_does_not_mis_snap_distinct_items():
+    # The fuzzy layer must not map a genuinely distinct ingredient onto a lookalike, and
+    # gibberish must pass through untouched rather than snapping to something unrelated.
+    assert recommender.normalize_ingredient("sour cream") == "sour_cream"
+    assert recommender.normalize_ingredient("xqzptvw") == "xqzptvw"
+    # 'broccoli' must never collapse to 'cauliflower'.
+    assert recommender.normalize_ingredient("broccoli") == "broccoli"
 
 
 def test_recommend_returns_expected_shape_for_empty_fridge():

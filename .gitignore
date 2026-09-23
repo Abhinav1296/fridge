@@ -6,6 +6,12 @@
 *.sqlite
 *.sqlite3
 
+# Bake-off: raw datasets (large, Kaggle-licensed) + generated candidate models — don't commit
+data/raw/
+data/embeddings_*.json
+data/emb_*.json
+data/eval_results.json
+
 # Python
 __pycache__/
 *.py[cod]
