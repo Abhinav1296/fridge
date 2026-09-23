@@ -22,6 +22,9 @@ A thin HTTP wrapper around :mod:`vision_service` and :mod:`storage`:
   and caches its nutrition.
 * ``/api/perishables`` (GET/POST/DELETE) manages the user's tracked "use by" dates.
 
+A Socket.IO layer pushes a ``state_changed`` hint to every open tab whenever a mutating
+route changes the fridge, so views refresh live without polling (see :func:`_emit_state`).
+
 The web layer owns request/response concerns only. All vision logic lives in
 :mod:`vision_service`, recommendation logic in :mod:`recommender`, meal-plan optimization
 in :mod:`optimizer`, the conversational agent in :mod:`agent`, and persistence in
@@ -40,6 +43,7 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from flask_socketio import SocketIO
 from PIL import Image, UnidentifiedImageError
 
 import agent
@@ -81,6 +85,37 @@ MAX_CONTENT_LENGTH = 10 * 1024 * 1024
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+
+# Real-time layer. When the fridge changes on the server (a new scan, a cooked meal, a
+# tracked item resolved, waste logged, nutrition refreshed) we push a lightweight
+# "state_changed" hint to every open browser tab so they refresh the affected views live —
+# no polling, no manual reload. ``async_mode="threading"`` runs on the plain Werkzeug/gthread
+# server (no eventlet/gevent needed); the default same-origin CORS policy is kept. Broadcasts
+# fan out from a single process — to scale past one worker, back this with the Redis message
+# queue that arrives with the async-jobs phase (``SocketIO(..., message_queue=...)``).
+socketio = SocketIO(app, async_mode="threading", logger=False, engineio_logger=False)
+
+
+def _emit_state(*scopes: str, source: str | None = None) -> None:
+    """Broadcast a "these views changed, please refresh" hint to all connected clients.
+
+    Best-effort and never in the request's critical path: the HTTP mutation has already
+    succeeded by the time this runs, so a socket failure is logged and swallowed rather
+    than turned into an error the user sees. ``scopes`` name the client views to refresh
+    (e.g. "inventory", "analytics", "perishables", "nutrition").
+    """
+    try:
+        socketio.emit("state_changed", {"scopes": list(scopes), "source": source})
+    except Exception:  # noqa: BLE001 — realtime is additive; it must never break a response
+        logger.exception("Failed to emit realtime state update")
+
+
+@socketio.on("connect")
+def _on_connect() -> None:
+    """Log new real-time subscribers. No server state is pushed on connect — the page
+    loads its own initial data over HTTP; sockets carry only subsequent change hints."""
+    logger.info("Realtime client connected")
+
 
 # Ensure the history database exists before serving. A DB problem must not take the
 # whole app down — analysis still works without history — so failures are logged, not
@@ -169,6 +204,9 @@ def analyze():
         storage.save_scan(result, source)
     except Exception:  # noqa: BLE001 — history is best-effort, analysis is what matters
         logger.exception("Failed to record scan to history (analysis still returned)")
+    else:
+        # A new scan replaces the fridge snapshot — nudge open tabs to refresh inventory.
+        _emit_state("inventory", source="scan")
 
     return jsonify(result)
 
@@ -408,6 +446,8 @@ def api_nutrition_refresh():
     except Exception:  # noqa: BLE001 — enrichment must never take the page down
         logger.exception("Nutrition refresh failed")
         return jsonify({"error": "Couldn't refresh nutrition right now."}), 500
+    if summary.get("updated"):
+        _emit_state("nutrition", source="nutrition-refresh")
     return jsonify(summary)
 
 
@@ -452,6 +492,8 @@ def api_barcode():
             )
         except Exception:  # noqa: BLE001 — caching is best-effort
             logger.exception("Failed to cache nutrition for scanned product")
+        else:
+            _emit_state("nutrition", source="barcode")
 
     return jsonify(
         {
@@ -549,6 +591,7 @@ def api_add_perishable():
     except Exception:  # noqa: BLE001
         logger.exception("Failed to add perishable")
         return jsonify({"error": "Couldn't save that item right now."}), 500
+    _emit_state("perishables", source="perishable-add")
     return (
         jsonify({"perishable": {"id": perishable_id, "name": name, "use_by": use_by}}),
         201,
@@ -565,6 +608,7 @@ def api_delete_perishable(perishable_id: int):
         return jsonify({"error": "Couldn't remove that item right now."}), 500
     if not removed:
         return jsonify({"error": "That item was not found."}), 404
+    _emit_state("perishables", source="perishable-delete")
     return jsonify({"deleted": True})
 
 
@@ -576,6 +620,8 @@ def api_clear_perishables():
     except Exception:  # noqa: BLE001
         logger.exception("Failed to clear perishables")
         return jsonify({"error": "Couldn't clear your tracked items right now."}), 500
+    if cleared:
+        _emit_state("perishables", source="perishable-clear")
     return jsonify({"cleared": cleared})
 
 
@@ -615,6 +661,8 @@ def api_resolve_perishable(perishable_id: int):
     except Exception:  # noqa: BLE001
         logger.exception("Failed to resolve perishable %s", perishable_id)
         return jsonify({"error": "Couldn't update that item right now."}), 500
+    # Resolving a tracked item logs a waste/used event and drops it from the at-risk list.
+    _emit_state("perishables", "analytics", source="perishable-resolve")
     return jsonify({"resolved": True, "event": event, "id": event_id, "name": name})
 
 
@@ -647,6 +695,7 @@ def api_log_waste():
     except Exception:  # noqa: BLE001
         logger.exception("Failed to log waste event")
         return jsonify({"error": "Couldn't save that right now."}), 500
+    _emit_state("analytics", source="waste")
     return jsonify({"logged": True, "event": event, "id": event_id, "name": name}), 201
 
 
@@ -736,6 +785,10 @@ def api_cook():
     except Exception:  # noqa: BLE001 — the write succeeded; a read failure shouldn't 500
         logger.exception("Cooked meal recorded but couldn't reload inventory")
         scan = None
+
+    # Cooking touches three views at once: the fridge shrinks, waste analytics tick up,
+    # and any tracked perishables it used up are cleared.
+    _emit_state("inventory", "analytics", "perishables", source="cook")
 
     return (
         jsonify(
@@ -935,5 +988,8 @@ def _prepare_image(data: bytes) -> bytes:
 
 
 if __name__ == "__main__":
-    # Convenience for `python app.py`. `flask run` is the documented entry point.
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Convenience for `python app.py`. Use ``socketio.run`` (not ``app.run``) so the
+    # Socket.IO/WebSocket transport is served alongside the HTTP routes.
+    # ``allow_unsafe_werkzeug`` opts the dev server in for local use — production runs
+    # under gunicorn (see the Dockerfile).
+    socketio.run(app, host="127.0.0.1", port=5000, debug=True, allow_unsafe_werkzeug=True)

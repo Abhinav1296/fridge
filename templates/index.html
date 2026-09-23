@@ -11,7 +11,13 @@
   <header class="site-header">
     <h1>🧊 SmartFridge Vision</h1>
     <p class="tagline">Snap or upload a photo of your fridge — get a structured inventory with freshness.</p>
+    <span id="live-status" class="live-status" data-state="connecting" title="Real-time updates across your open tabs" hidden>
+      <span class="live-dot" aria-hidden="true"></span>
+      <span id="live-label" class="live-label">Connecting…</span>
+    </span>
   </header>
+
+  <div id="live-toast" class="live-toast" role="status" aria-live="polite" hidden></div>
 
   <main class="container">
     <!-- Input source tabs -->
@@ -400,6 +406,9 @@
     <p class="muted small">SmartFridge Vision · Live inventory, scan history, and recipe suggestions.</p>
   </footer>
 
+  <!-- Socket.IO client for real-time updates. Loaded from CDN; the app degrades to
+       manual refresh (its previous behaviour) if this can't load — see initRealtime(). -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>

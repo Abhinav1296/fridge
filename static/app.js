@@ -30,6 +30,11 @@ const els = {
   panelWebcam: document.getElementById("panel-webcam"),
   panelHistory: document.getElementById("panel-history"),
 
+  // Real-time status indicator + transient "just updated" toast.
+  liveStatus: document.getElementById("live-status"),
+  liveLabel: document.getElementById("live-label"),
+  liveToast: document.getElementById("live-toast"),
+
   // Wrapper (display:contents) around the whole capture flow. Only the Upload and
   // Webcam tabs show it; Fridge and History hide it.
   captureExtras: document.getElementById("capture-extras"),
@@ -227,6 +232,11 @@ let wasteBusy = false;
 const chefHistory = [];
 let chefBusy = false;
 
+// Which tabs the user has opened at least once. A real-time "state_changed" push only
+// re-fetches a tab's data if that tab has actually been loaded, so a background update
+// never eagerly populates a panel the user has never visited (matching the lazy-load model).
+const tabsSeen = new Set(["fridge"]);
+
 // --- Tab switching ----------------------------------------------------------
 function activateTab(which) {
   const tabs = {
@@ -240,6 +250,8 @@ function activateTab(which) {
     webcam: [els.tabWebcam, els.panelWebcam],
     history: [els.tabHistory, els.panelHistory],
   };
+
+  tabsSeen.add(which);
 
   for (const [name, [tab, panel]] of Object.entries(tabs)) {
     const active = name === which;
@@ -2361,5 +2373,103 @@ window.addEventListener("pagehide", () => {
   stopBarcodeScan();
 });
 
+// --- Real-time updates (Socket.IO) ------------------------------------------
+// When the fridge changes on the server, every open tab receives a "state_changed" push
+// and live-refreshes the affected views. Degrades gracefully: if the Socket.IO client
+// didn't load (offline, CDN blocked), the app keeps working with manual refresh as before.
+
+// Map each server "scope" to the client refresh it triggers. A refresh runs only if that
+// tab has been opened (tabsSeen) — except the fridge, the home view, which stays current so
+// it's fresh whenever the user returns. The meal plan is intentionally excluded: re-solving
+// on every change would fight the "rebuild explicitly" design.
+const LIVE_SCOPES = {
+  inventory: () => {
+    loadFridge();
+    if (tabsSeen.has("suggestions")) loadSuggestions();
+  },
+  perishables: () => {
+    if (tabsSeen.has("suggestions")) loadPerishables();
+  },
+  analytics: () => {
+    if (tabsSeen.has("analytics")) loadAnalytics();
+  },
+  nutrition: () => {
+    if (tabsSeen.has("nutrition")) loadNutrition();
+  },
+};
+
+const SCOPE_LABELS = {
+  inventory: "Fridge",
+  perishables: "Tracked items",
+  analytics: "Analytics",
+  nutrition: "Nutrition",
+};
+
+let liveToastTimer = null;
+let liveToastHideTimer = null;
+
+function setLiveStatus(state, label) {
+  if (!els.liveStatus) return;
+  els.liveStatus.hidden = false;
+  els.liveStatus.dataset.state = state;
+  if (els.liveLabel) els.liveLabel.textContent = label;
+}
+
+function showLiveToast(scopes) {
+  if (!els.liveToast) return;
+  const names = scopes.map((s) => SCOPE_LABELS[s]).filter(Boolean);
+  els.liveToast.textContent = `🔄 Updated live: ${names.length ? names.join(" · ") : "Fridge"}`;
+  els.liveToast.hidden = false;
+  // Force a reflow so re-triggering the transition restarts the fade-in.
+  void els.liveToast.offsetWidth;
+  els.liveToast.classList.add("show");
+  if (liveToastTimer) clearTimeout(liveToastTimer);
+  if (liveToastHideTimer) clearTimeout(liveToastHideTimer);
+  liveToastTimer = setTimeout(() => {
+    els.liveToast.classList.remove("show");
+    // Keep it out of the a11y tree once faded so it isn't re-announced.
+    liveToastHideTimer = setTimeout(() => {
+      els.liveToast.hidden = true;
+    }, 300);
+  }, 2600);
+}
+
+function handleStateChanged(payload) {
+  const scopes = (payload && Array.isArray(payload.scopes) ? payload.scopes : []).filter(
+    (s) => s in LIVE_SCOPES
+  );
+  if (!scopes.length) return;
+  for (const scope of scopes) {
+    try {
+      LIVE_SCOPES[scope]();
+    } catch (err) {
+      console.error("Live refresh failed for scope", scope, err);
+    }
+  }
+  showLiveToast(scopes);
+}
+
+function initRealtime() {
+  // No Socket.IO client on the page (CDN blocked / offline) → stay on manual refresh.
+  if (typeof io !== "function") return;
+
+  let socket;
+  try {
+    socket = io(); // same-origin; polling with automatic upgrade to WebSocket
+  } catch (err) {
+    console.warn("Real-time updates unavailable:", err);
+    return;
+  }
+
+  setLiveStatus("connecting", "Connecting…");
+  socket.on("connect", () => setLiveStatus("live", "Live"));
+  socket.on("disconnect", () => setLiveStatus("offline", "Offline"));
+  socket.on("connect_error", () => setLiveStatus("offline", "Offline"));
+  socket.on("state_changed", handleStateChanged);
+}
+
 // The Fridge tab is the home view: load the current inventory on startup.
 activateTab("fridge");
+
+// Subscribe to live updates once the initial view is set up.
+initRealtime();

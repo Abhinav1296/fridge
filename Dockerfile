@@ -37,5 +37,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 url='http://127.0.0.1:%s/health' % os.environ.get('PORT','5000'); \
 sys.exit(0 if urllib.request.urlopen(url, timeout=4).status == 200 else 1)"
 
-# 2 workers × 4 threads is a sane default for a small I/O-bound app; override at deploy.
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} --workers 2 --threads 4 --timeout 120 app:app"]
+# ONE gthread worker with a pool of threads. Socket.IO runs in threading mode and
+# keeps its connected-client set in process memory, so a broadcast from a second
+# worker would never reach clients attached to the first. Stay single-worker until
+# real-time is fan-out across a Redis message queue (SocketIO(message_queue=...)),
+# then it becomes safe to raise --workers. Threads still give I/O-bound concurrency.
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} --workers 1 --threads 8 --worker-class gthread --timeout 120 app:app"]
