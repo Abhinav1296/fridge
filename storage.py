@@ -72,9 +72,21 @@ _SCHEMA_STATEMENTS = [
         reason       TEXT
     )
     """,
+    # User-entered "use by" dates for perishables (paneer, milk, ...). This replaces
+    # unreliable expiry-date OCR: the user supplies a reliable date, which the recommender
+    # turns into "use soon" prompts and recipe timing. Independent of any scan.
+    """
+    CREATE TABLE IF NOT EXISTS perishables (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT    NOT NULL,               -- ingredient name the user typed
+        use_by      TEXT    NOT NULL,               -- date 'YYYY-MM-DD'
+        created_at  TEXT    NOT NULL                -- UTC ISO-8601 when the entry was added
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_items_scan        ON items(scan_id)",
     "CREATE INDEX IF NOT EXISTS idx_unidentified_scan ON unidentified(scan_id)",
     "CREATE INDEX IF NOT EXISTS idx_scans_created_at  ON scans(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_perishables_use_by ON perishables(use_by)",
 ]
 
 
@@ -268,6 +280,68 @@ def get_latest_scan() -> dict[str, Any] | None:
             )
         )
         return _hydrate_scan(client, scans[0]) if scans else None
+
+
+# --- Perishables (user-entered "use by" dates) ------------------------------
+
+
+def add_perishable(name: str, use_by: str, created_at: datetime | None = None) -> int:
+    """Record a perishable the user is tracking with a "use by" date; return its new id.
+
+    Args:
+        name: The ingredient name the user typed (stored as-is; the recommender
+            normalizes it to a canonical token when matching).
+        use_by: A ``YYYY-MM-DD`` date string (validated by the caller).
+        created_at: Override timestamp (UTC). Defaults to now.
+
+    Returns:
+        The auto-generated ``perishables.id``.
+    """
+    when = (created_at or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        result = client.execute(
+            "INSERT INTO perishables (name, use_by, created_at) VALUES (?, ?, ?)",
+            [str(name).strip(), str(use_by).strip(), when],
+        )
+        perishable_id = int(result.last_insert_rowid)
+    logger.info("Added perishable %d (%s, use_by=%s)", perishable_id, name, use_by)
+    return perishable_id
+
+
+def list_perishables() -> list[dict[str, Any]]:
+    """Return all tracked perishables, soonest ``use_by`` first.
+
+    Returns:
+        A list of dicts: ``{id, name, use_by, created_at}``.
+    """
+    with _connect() as client:
+        return _rows_to_dicts(
+            client.execute(
+                "SELECT id, name, use_by, created_at "
+                "FROM perishables ORDER BY use_by ASC, id ASC"
+            )
+        )
+
+
+def delete_perishable(perishable_id: int) -> bool:
+    """Delete one tracked perishable; return ``True`` if a row was removed."""
+    with _connect() as client:
+        result = client.execute(
+            "DELETE FROM perishables WHERE id = ?", [int(perishable_id)]
+        )
+        removed = int(result.rows_affected or 0) > 0
+    if removed:
+        logger.info("Deleted perishable %d", perishable_id)
+    return removed
+
+
+def clear_perishables() -> int:
+    """Delete all tracked perishables; return how many rows were removed."""
+    with _connect() as client:
+        result = client.execute("DELETE FROM perishables")
+        removed = int(result.rows_affected or 0)
+    logger.info("Cleared %d perishable(s)", removed)
+    return removed
 
 
 def _hydrate_scan(

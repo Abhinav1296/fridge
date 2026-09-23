@@ -1,11 +1,13 @@
-# SmartFridge Vision MVP
+# SmartFridge Vision
 
-**Phase 1 of a smart-fridge system.** It does exactly one thing well: you give it a
+**A smart-fridge system, built one layer at a time.** At its core: you give it a
 photo of your fridge or box contents — by **file upload** or a **live webcam
 snapshot** — and it returns a structured inventory with **per-item freshness**,
-powered by a vision-language model.
+powered by a vision-language model. On top of that it keeps a **live inventory** and
+**scan history**, and turns what you have into **recipe, use-soon, and shopping
+suggestions** via a small ingredient-embedding model the project trains itself.
 
-That's the whole scope for now. See [Out of scope / coming next](#out-of-scope--coming-next).
+See [Out of scope / coming next](#out-of-scope--coming-next) for what's still ahead.
 
 ---
 
@@ -23,6 +25,10 @@ That's the whole scope for now. See [Out of scope / coming next](#out-of-scope--
   separately under **"Needs your input"** instead of being guessed.
 - A **History** tab that records every scan — what was found and **when** — so you can
   look back at previous inventories. See [Inventory history](#inventory-history).
+- A **Suggestions** tab that turns your current inventory into **recipe ideas**, a
+  **"use soon"** list, and a short **shopping list** — ranked by a small ingredient-
+  embedding model the project trains itself. You can also enter **"use by" dates** for
+  perishables so nothing quietly expires. See [Suggestions & the recommender](#suggestions--the-recommender).
 
 ---
 
@@ -192,25 +198,30 @@ duplicate attempts are skipped so no call is wasted.
 capstone/
 ├── app.py               # Flask web layer: routing, image guards, error mapping
 ├── vision_service.py    # Vision integration (framework-agnostic) + robust JSON parsing
-├── storage.py           # SQLite inventory-history persistence (framework-agnostic)
+├── storage.py           # SQLite/Turso persistence: history + perishables (framework-agnostic)
+├── recommender.py       # Recipe / use-soon / shopping engine (framework-agnostic, pure-Python)
+├── build_embeddings.py  # OFFLINE trainer for the ingredient embeddings (uses numpy)
+├── data/
+│   ├── recipes.json              # Recipe corpus for the recommender
+│   ├── ingredient_aliases.json   # Synonym → canonical ingredient map
+│   └── ingredient_embeddings.json# Trained ingredient vectors (built offline)
 ├── templates/
-│   └── index.html       # Single-page UI (My Fridge / Upload / Webcam / History tabs)
+│   └── index.html       # Single-page UI (My Fridge / Suggestions / Upload / Webcam / History)
 ├── static/
 │   ├── style.css        # Responsive, mobile-friendly styles + freshness badges
-│   └── app.js           # Upload, webcam capture, fetch, and result rendering
-├── deploy/
-│   └── smartfridge.service  # systemd unit for self-hosting on a Pi / VM (autostart)
+│   └── app.js           # Upload, webcam capture, fetch, suggestions, and rendering
 ├── vercel.json          # Vercel serverless deploy config
-├── requirements.txt
+├── requirements.txt     # Runtime deps (no numpy — keeps Vercel light)
+├── requirements-ml.txt  # OFFLINE-only deps for retraining embeddings (numpy)
 ├── .env.example         # Config template (copy to .env)
 ├── smartfridge.db       # Local history database (auto-created, git-ignored)
 └── README.md
 ```
 
 **Design note:** all vision logic lives in `vision_service.analyze_image(image_bytes)
--> dict`, and all persistence in `storage.py` — **neither has a Flask dependency**. A
-future agent layer can call them directly without touching the web code; that's the seam
-that keeps this modular.
+-> dict`, all persistence in `storage.py`, and all recommendation logic in
+`recommender.recommend(...)` — **none has a Flask dependency**. A future agent layer can
+call them directly without touching the web code; that's the seam that keeps this modular.
 
 ### How an analysis flows
 
@@ -296,6 +307,85 @@ dependency**, so a future agent layer can read and write history directly.
 
 ---
 
+## Suggestions & the recommender
+
+The **Suggestions** tab answers the next everyday question after *"what's in my
+fridge?"* — namely *"so what do I cook, and what should I use before it goes off?"* It
+takes your current inventory (the latest scan) plus any **"use by" dates** you've
+entered and produces three things:
+
+- **Use soon** — items that are spoiled, past their use-by date, or due within a few
+  days, most-pressing first, so nothing is quietly wasted.
+- **Cook now** — recipes ranked by how much of each you already have and by whether they
+  use up something expiring, so a suggestion is both convenient *and* waste-reducing.
+- **Worth buying** — the few missing ingredients that would unlock the most
+  near-complete recipes.
+
+### The "use by" tracker
+
+Reliable expiry data can't be read off a fridge photo, so instead of guessing (or doing
+fragile OCR) the app lets you **enter a use-by date** per perishable — paneer, milk,
+etc. — right on the Suggestions tab. Those dates drive the "use soon" list and push
+recipes that consume the expiring item to the top. Tracked items are stored in a
+`perishables` table and managed through small endpoints:
+
+| Endpoint                          | What it does                                  |
+| --------------------------------- | --------------------------------------------- |
+| `GET /api/perishables`            | List tracked items, soonest use-by first.     |
+| `POST /api/perishables`           | Add one (`{name, use_by}`, `use_by` = `YYYY-MM-DD`). |
+| `DELETE /api/perishables/<id>`    | Stop tracking one item.                       |
+| `DELETE /api/perishables`         | Clear all tracked items.                      |
+
+### The recommender — the "built by us" ML piece
+
+This is the component the project builds itself, in [`recommender.py`](recommender.py).
+Matching *"what's in the fridge"* to *"what I can cook"* is more than string equality:
+`curd` and `yogurt` are the same thing, and a fridge of `onion` + `tomato` + `ginger`
+is *semantically* close to a curry even before an exact match. To capture that, each
+ingredient is represented by a learned **embedding** — a dense vector trained with the
+**skip-gram / word2vec** technique over the recipe corpus. A recipe's final rank blends
+three signals:
+
+- **coverage** (how much of the recipe you already have) — weighted highest,
+- **expiry urgency** (does it use something that's expiring), and
+- **embedding cosine similarity** between your fridge and the recipe.
+
+If the trained vectors are ever missing, the recommender **degrades gracefully** to a
+purely lexical (coverage + urgency) ranking — the app never breaks.
+
+**How the ML stays lightweight.** The embeddings are trained **offline** by
+[`build_embeddings.py`](build_embeddings.py) (the only place `numpy` is used) and saved
+as plain JSON vectors in `data/ingredient_embeddings.json`. At **runtime** the
+recommender reads that JSON and does the cosine math in **pure Python** — no `numpy`, no
+model download — so `requirements.txt` stays tiny and the app runs happily on Vercel.
+`numpy` lives only in the separate **`requirements-ml.txt`**, which you install *only if
+you want to retrain the vectors*:
+
+```powershell
+pip install -r requirements-ml.txt
+python build_embeddings.py          # regenerates data/ingredient_embeddings.json
+```
+
+The bundled data files in `data/` are:
+
+| File                         | What it is                                                   |
+| ---------------------------- | ----------------------------------------------------------- |
+| `recipes.json`               | The recipe corpus (id, title, canonical ingredients, tags). |
+| `ingredient_aliases.json`    | Synonym → canonical map (curd → yogurt, capsicum, dal → lentil…). |
+| `ingredient_embeddings.json` | The trained ingredient vectors (regenerated as above).      |
+
+You can point the recommender at data files elsewhere with the optional `RECIPES_PATH`,
+`INGREDIENT_ALIASES_PATH`, and `INGREDIENT_EMBEDDINGS_PATH` env vars (see
+[`.env.example`](.env.example)); the defaults use the bundled copies.
+
+The web layer exposes it at `GET /api/recommendations`, which reads the latest scan and
+your tracked perishables, calls `recommender.recommend(...)`, and returns the use-soon /
+recipes / shopping payload the Suggestions tab renders. Like the other core modules,
+`recommender.py` has **no Flask dependency**, so an autonomous agent can call
+`recommend()` directly.
+
+---
+
 ## Deploy for free (Vercel + Turso)
 
 The app runs on **Vercel's** free tier, with history stored in a free **Turso** database.
@@ -323,67 +413,6 @@ SQLite-compatible database that solves exactly that. Config for the deploy lives
 
 ---
 
-## Run on Raspberry Pi Desktop (VirtualBox)
-
-Toward the goal of running on a real Raspberry Pi, you can rehearse the whole workflow on
-a PC using **[Raspberry Pi Desktop](https://www.raspberrypi.com/software/raspberry-pi-desktop/)**
-— the Raspberry Pi Foundation's **x86 (PC) edition** of their Debian OS — inside **Oracle
-VirtualBox**. Because it's x86 it runs at native speed (VirtualBox virtualises x86; it does
-*not* emulate ARM). It faithfully rehearses the OS + desktop + app (`apt`, Python, run,
-persist, autostart); it does **not** have ARM, GPIO, or a Pi Camera — those are validated
-only on real hardware later.
-
-**1. Create the VM.** Install VirtualBox on Windows. In **File → Preferences → General**, set
-the *Default Machine Folder* to a drive with room (e.g. `D:\VirtualBox VMs`) — the virtual
-disk grows to ~15–25 GB. Download the Raspberry Pi Desktop ISO there. Create a VM: type
-**Linux / Debian (32-bit)** (match the ISO's architecture), **3072 MB** RAM, **2 CPUs**, a
-**25 GB** dynamically-allocated disk; enable **PAE/NX** (System → Processor) and set Video
-Memory to 128 MB. Attach the ISO and do a **Graphical Install** onto the disk (not the live
-"Run" option). Optionally install Guest Additions for a resizable window.
-
-**2. Forward the app's port.** Settings → Network → Adapter 1 (NAT) → Advanced → *Port
-Forwarding*: add Host `5000` → Guest `5000`. (This lets your Windows browser reach the app
-at `localhost` — see the webcam note below.)
-
-**3. Install the app in the guest.** Open a terminal in the Pi desktop:
-
-```bash
-sudo apt update && sudo apt install -y python3-venv python3-pip git
-git clone <your capstone repo> ~/capstone && cd ~/capstone
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env      # then edit .env: set VISION_API_KEY; leave TURSO_* unset
-```
-
-Leaving `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` unset stores history in a local SQLite
-file on the VM's disk (a real disk, so it persists) — no code change needed.
-
-**4. Run it.**
-
-```bash
-gunicorn --bind 0.0.0.0:5000 app:app
-```
-
-Then open **`http://localhost:5000` in your Windows browser** (via the port forward). Because
-`localhost` is a *secure context*, the browser's `getUserMedia` works, so the **Webcam tab
-uses your PC's camera** with no VirtualBox webcam passthrough.
-
-> **Webcam & secure contexts.** Browsers only allow camera access over `localhost` or HTTPS.
-> Reaching the app from another device by the machine's LAN IP (`http://<ip>:5000`) is *not*
-> a secure context and the camera will be blocked — open it in the machine's own browser at
-> `localhost`, or put it behind HTTPS. Alternatively, run the app *inside* the VM with
-> `python app.py` and browse at `localhost` in the guest's own browser; the Webcam tab then
-> needs a webcam passed into the VM (VirtualBox Extension Pack + `VBoxManage controlvm "<VM>"
-> webcam attach`).
-
-**5. Start on boot (like a real Pi appliance).** [`deploy/smartfridge.service`](deploy/smartfridge.service)
-is a systemd unit that runs the app under gunicorn and restarts it on crash. Follow the
-install steps in its header (`sudo systemctl enable --now smartfridge`), then reboot and
-confirm the app comes back up on its own. This is exactly how you'll run it on real Pi
-hardware.
-
----
-
 ## Out of scope / coming next
 
 This project is intentionally narrow and grows one layer at a time. **Not built yet** —
@@ -393,11 +422,12 @@ planned for later phases:
   tick things off, instead of the current snapshot ([My Fridge](#whats-in-my-fridge-now)
   today shows your latest scan).
 - **Scan diffing** — what was added/removed/used up between two scans.
-- **Shopping list** — auto-generated from what's low or spoiled.
-- **Notifications** — expiry / low-stock alerts.
+- **Notifications** — expiry / low-stock alerts (the [use-soon list](#suggestions--the-recommender)
+  is the data behind these; pushing them is the next step).
 - **Agents** — reasoning/automation on top of the inventory.
-- **Hardware / IoT** — in-fridge cameras and sensors.
 
-**Recently added:** a persistent **inventory history** database and a **My Fridge**
-current-inventory view (see above) — the first steps beyond the vision MVP. The code is
-structured so the rest can be added without a rewrite.
+**Recently added:** the **Suggestions** tab — recipe ideas, a use-soon list, and a shopping
+list from an [ingredient-embedding recommender](#suggestions--the-recommender) the project
+trains itself, plus a **"use by" date** tracker; a persistent **inventory history** database;
+and a **My Fridge** current-inventory view. The code is structured so the rest can be added
+without a rewrite.

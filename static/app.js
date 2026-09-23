@@ -12,10 +12,12 @@
 // --- Element references -----------------------------------------------------
 const els = {
   tabFridge: document.getElementById("tab-fridge"),
+  tabSuggestions: document.getElementById("tab-suggestions"),
   tabUpload: document.getElementById("tab-upload"),
   tabWebcam: document.getElementById("tab-webcam"),
   tabHistory: document.getElementById("tab-history"),
   panelFridge: document.getElementById("panel-fridge"),
+  panelSuggestions: document.getElementById("panel-suggestions"),
   panelUpload: document.getElementById("panel-upload"),
   panelWebcam: document.getElementById("panel-webcam"),
   panelHistory: document.getElementById("panel-history"),
@@ -44,6 +46,28 @@ const els = {
   historyEmpty: document.getElementById("history-empty"),
   historyError: document.getElementById("history-error"),
   refreshHistory: document.getElementById("refresh-history"),
+
+  // Suggestions tab elements.
+  refreshSuggestions: document.getElementById("refresh-suggestions"),
+  perishForm: document.getElementById("perish-form"),
+  perishName: document.getElementById("perish-name"),
+  perishDate: document.getElementById("perish-date"),
+  perishError: document.getElementById("perish-error"),
+  perishList: document.getElementById("perish-list"),
+  perishEmpty: document.getElementById("perish-empty"),
+  suggestLoading: document.getElementById("suggest-loading"),
+  suggestError: document.getElementById("suggest-error"),
+  suggestBody: document.getElementById("suggest-body"),
+  useSoonSection: document.getElementById("use-soon-section"),
+  useSoonList: document.getElementById("use-soon-list"),
+  useSoonCount: document.getElementById("use-soon-count"),
+  recipesSection: document.getElementById("recipes-section"),
+  recipesList: document.getElementById("recipes-list"),
+  recipesCount: document.getElementById("recipes-count"),
+  recipesEmpty: document.getElementById("recipes-empty"),
+  shoppingSection: document.getElementById("shopping-section"),
+  shoppingList: document.getElementById("shopping-list"),
+  suggestMl: document.getElementById("suggest-ml"),
 
   dropzone: document.getElementById("dropzone"),
   fileInput: document.getElementById("file-input"),
@@ -104,6 +128,7 @@ let fridgeHasUnidentified = false;
 function activateTab(which) {
   const tabs = {
     fridge: [els.tabFridge, els.panelFridge],
+    suggestions: [els.tabSuggestions, els.panelSuggestions],
     upload: [els.tabUpload, els.panelUpload],
     webcam: [els.tabWebcam, els.panelWebcam],
     history: [els.tabHistory, els.panelHistory],
@@ -128,15 +153,21 @@ function activateTab(which) {
     loadFridge();
   } else if (which === "history") {
     loadHistory();
+  } else if (which === "suggestions") {
+    loadPerishables();
+    loadSuggestions();
   }
 }
 
 els.tabFridge.addEventListener("click", () => activateTab("fridge"));
+els.tabSuggestions.addEventListener("click", () => activateTab("suggestions"));
 els.tabUpload.addEventListener("click", () => activateTab("upload"));
 els.tabWebcam.addEventListener("click", () => activateTab("webcam"));
 els.tabHistory.addEventListener("click", () => activateTab("history"));
 els.refreshFridge.addEventListener("click", loadFridge);
 els.refreshHistory.addEventListener("click", loadHistory);
+els.refreshSuggestions.addEventListener("click", loadSuggestions);
+els.perishForm.addEventListener("submit", addPerishable);
 els.fridgeScanCta.addEventListener("click", () => activateTab("upload"));
 els.fridgeToggle.addEventListener("click", () => setFridgeItemsOpen(!fridgeItemsOpen));
 
@@ -467,9 +498,8 @@ function renderFridge(scan) {
   els.fridgeCallout.hidden = true;
 
   // "As of" header line.
-  const sourceLabel = scan.source === "webcam" ? "📷 Webcam" : "⬆️ Upload";
   els.fridgeAsof.textContent =
-    `As of ${formatTimestamp(scan.created_at)} · ${sourceLabel}`;
+    `As of ${formatTimestamp(scan.created_at)} · ${sourceLabel(scan.source)}`;
 
   // Headline count (distinct entries, matching the History tab).
   const total = items.length;
@@ -641,8 +671,7 @@ function buildScanEntry(scan) {
   const meta = document.createElement("span");
   meta.className = "scan-meta muted small";
   const count = items.length;
-  const sourceLabel = scan.source === "webcam" ? "📷 Webcam" : "⬆️ Upload";
-  meta.textContent = `${sourceLabel} · ${count} ${count === 1 ? "item" : "items"}`;
+  meta.textContent = `${sourceLabel(scan.source)} · ${count} ${count === 1 ? "item" : "items"}`;
 
   head.append(when, meta);
   entry.appendChild(head);
@@ -746,6 +775,302 @@ function formatTimestamp(iso) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+// A short label for how a scan's image arrived: upload or webcam.
+function sourceLabel(source) {
+  if (source === "webcam") return "📷 Webcam";
+  return "⬆️ Upload";
+}
+
+// --- Suggestions (recipes + use-soon + shopping) ----------------------------
+
+// Map a recommender "severity" to one of the existing freshness badge colours.
+const SEVERITY_BADGE = { overdue: "spoiled", spoiled: "spoiled", soon: "use_soon" };
+
+async function loadPerishables() {
+  try {
+    const response = await fetch("/api/perishables");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showPerishError((payload && payload.error) || "Couldn't load your tracked items.");
+      return;
+    }
+    renderPerishables((payload && payload.perishables) || []);
+  } catch (_err) {
+    showPerishError("Couldn't reach the server to load your tracked items.");
+  }
+}
+
+function renderPerishables(list) {
+  els.perishList.innerHTML = "";
+  els.perishEmpty.hidden = list.length > 0;
+  for (const p of list) {
+    els.perishList.appendChild(buildPerishRow(p));
+  }
+}
+
+function buildPerishRow(p) {
+  const row = document.createElement("li");
+  row.className = "perish-row";
+
+  const label = document.createElement("span");
+  label.className = "perish-label";
+  const name = document.createElement("span");
+  name.className = "perish-name-text";
+  name.textContent = p.name;
+  const date = document.createElement("span");
+  date.className = "perish-date-text muted small";
+  date.textContent = `use by ${formatDate(p.use_by)}`;
+  label.append(name, date);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "perish-remove";
+  remove.setAttribute("aria-label", `Stop tracking ${p.name}`);
+  remove.textContent = "✕";
+  remove.addEventListener("click", () => deletePerishable(p.id));
+
+  row.append(label, remove);
+  return row;
+}
+
+async function addPerishable(event) {
+  event.preventDefault();
+  hidePerishError();
+  const name = els.perishName.value.trim();
+  const useBy = els.perishDate.value; // <input type=date> gives YYYY-MM-DD
+  if (!name) {
+    showPerishError("Enter what the item is.");
+    return;
+  }
+  if (!useBy) {
+    showPerishError("Pick a use-by date.");
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/perishables", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, use_by: useBy }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showPerishError((payload && payload.error) || "Couldn't save that item.");
+      return;
+    }
+    els.perishForm.reset();
+    els.perishName.focus();
+    loadPerishables();
+    loadSuggestions(); // a new date can change "use soon" and recipe ranking
+  } catch (_err) {
+    showPerishError("Couldn't reach the server to save that item.");
+  }
+}
+
+async function deletePerishable(id) {
+  try {
+    const response = await fetch(`/api/perishables/${id}`, { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      const payload = await response.json().catch(() => null);
+      showPerishError((payload && payload.error) || "Couldn't remove that item.");
+      return;
+    }
+    loadPerishables();
+    loadSuggestions();
+  } catch (_err) {
+    showPerishError("Couldn't reach the server to remove that item.");
+  }
+}
+
+async function loadSuggestions() {
+  els.suggestError.hidden = true;
+  els.suggestBody.hidden = true;
+  els.suggestLoading.hidden = false;
+
+  try {
+    const response = await fetch("/api/recommendations");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.suggestError.textContent =
+        (payload && payload.error) || "Couldn't build suggestions right now.";
+      els.suggestError.hidden = false;
+      return;
+    }
+    renderSuggestions(payload || {});
+  } catch (_err) {
+    els.suggestError.textContent = "Couldn't reach the server to build suggestions.";
+    els.suggestError.hidden = false;
+  } finally {
+    els.suggestLoading.hidden = true;
+  }
+}
+
+function renderSuggestions(data) {
+  const useSoon = Array.isArray(data.use_soon) ? data.use_soon : [];
+  const recipes = Array.isArray(data.recipes) ? data.recipes : [];
+  const shopping = Array.isArray(data.shopping) ? data.shopping : [];
+
+  // Use soon.
+  els.useSoonList.innerHTML = "";
+  els.useSoonSection.hidden = useSoon.length === 0;
+  els.useSoonCount.textContent = String(useSoon.length);
+  for (const u of useSoon) els.useSoonList.appendChild(buildUseSoonRow(u));
+
+  // Recipes.
+  els.recipesList.innerHTML = "";
+  els.recipesCount.textContent = String(recipes.length);
+  els.recipesEmpty.hidden = recipes.length > 0;
+  for (const r of recipes) els.recipesList.appendChild(buildRecipeCard(r));
+
+  // Shopping.
+  els.shoppingList.innerHTML = "";
+  els.shoppingSection.hidden = shopping.length === 0;
+  for (const s of shopping) els.shoppingList.appendChild(buildShoppingRow(s));
+
+  // ML transparency line.
+  const ml = data.ml || {};
+  if (ml.backend === "embedding" && ml.dim) {
+    els.suggestMl.textContent =
+      `Recipes ranked by a ${ml.dim}-dimension ingredient-embedding model we trained on our recipe set, blended with how much of each recipe you already have and what's expiring.`;
+  } else {
+    els.suggestMl.textContent =
+      "Recipes ranked by how much of each recipe you already have and what's expiring.";
+  }
+
+  els.suggestBody.hidden = false;
+}
+
+function buildUseSoonRow(u) {
+  const row = document.createElement("div");
+  row.className = "use-soon-row";
+
+  const badgeKind = SEVERITY_BADGE[u.severity] || "use_soon";
+  const badge = document.createElement("span");
+  badge.className = `badge badge-${badgeKind}`;
+  badge.textContent = u.name;
+
+  const reason = document.createElement("span");
+  reason.className = "muted small";
+  reason.textContent = u.reason || "";
+
+  row.append(badge, reason);
+  return row;
+}
+
+function buildRecipeCard(recipe) {
+  const card = document.createElement("div");
+  card.className = "card recipe-card";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("h3");
+  title.className = "card-name";
+  title.textContent = recipe.title || "Recipe";
+  head.appendChild(title);
+  if (Number.isFinite(recipe.time_min)) {
+    const time = document.createElement("span");
+    time.className = "recipe-time muted small";
+    time.textContent = `⏱ ${recipe.time_min} min`;
+    head.appendChild(time);
+  }
+  card.appendChild(head);
+
+  // Status tags: ready-to-cook and/or uses-expiring.
+  const tags = document.createElement("div");
+  tags.className = "recipe-tags";
+  if (recipe.can_make) {
+    const ready = document.createElement("span");
+    ready.className = "recipe-tag recipe-tag-ready";
+    ready.textContent = "✓ Ready to cook";
+    tags.appendChild(ready);
+  }
+  if (Array.isArray(recipe.uses_expiring) && recipe.uses_expiring.length) {
+    const uses = document.createElement("span");
+    uses.className = "recipe-tag recipe-tag-expiring";
+    uses.textContent = `Uses your ${recipe.uses_expiring.join(", ")}`;
+    tags.appendChild(uses);
+  }
+  if (tags.children.length) card.appendChild(tags);
+
+  // Have / need chip rows.
+  if (Array.isArray(recipe.matched) && recipe.matched.length) {
+    card.appendChild(chipRow("Have", recipe.matched, "chip-have"));
+  }
+  if (Array.isArray(recipe.missing) && recipe.missing.length) {
+    card.appendChild(chipRow("Need", recipe.missing, "chip-need"));
+  }
+
+  // Coverage bar.
+  if (Number.isFinite(recipe.coverage)) {
+    const bar = document.createElement("div");
+    bar.className = "recipe-cov";
+    const fill = document.createElement("div");
+    fill.className = "recipe-cov-fill";
+    fill.style.width = `${Math.round(recipe.coverage * 100)}%`;
+    bar.appendChild(fill);
+    card.appendChild(bar);
+  }
+
+  return card;
+}
+
+// A labelled row of small chips (e.g. "Have: Onion Tomato Garlic").
+function chipRow(label, names, chipClass) {
+  const row = document.createElement("p");
+  row.className = "recipe-chip-row";
+  const lead = document.createElement("span");
+  lead.className = "recipe-chip-label muted small";
+  lead.textContent = `${label}: `;
+  row.appendChild(lead);
+  for (const name of names) {
+    const chip = document.createElement("span");
+    chip.className = `chip ${chipClass}`;
+    chip.textContent = name;
+    row.appendChild(chip);
+  }
+  return row;
+}
+
+function buildShoppingRow(s) {
+  const row = document.createElement("div");
+  row.className = "shopping-row";
+
+  const item = document.createElement("span");
+  item.className = "shopping-item";
+  item.textContent = s.item;
+
+  const unlocks = document.createElement("span");
+  unlocks.className = "muted small";
+  const titles = Array.isArray(s.unlocks) ? s.unlocks : [];
+  unlocks.textContent = titles.length
+    ? `unlocks ${titles.join(", ")}`
+    : "";
+
+  row.append(item, unlocks);
+  return row;
+}
+
+function showPerishError(message) {
+  els.perishError.textContent = message;
+  els.perishError.hidden = false;
+}
+
+function hidePerishError() {
+  els.perishError.hidden = true;
+  els.perishError.textContent = "";
+}
+
+// Format a bare 'YYYY-MM-DD' as a local date without a timezone off-by-one.
+function formatDate(ymd) {
+  if (!ymd) return "";
+  const parts = String(ymd).split("-");
+  if (parts.length !== 3) return ymd;
+  const [y, m, d] = parts.map((n) => parseInt(n, 10));
+  const date = new Date(y, m - 1, d);
+  if (isNaN(date.getTime())) return ymd;
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 // --- UI helpers -------------------------------------------------------------

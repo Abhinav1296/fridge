@@ -20,6 +20,9 @@
         <button id="tab-fridge" class="tab active" role="tab" aria-selected="true" aria-controls="panel-fridge">
           My Fridge
         </button>
+        <button id="tab-suggestions" class="tab" role="tab" aria-selected="false" aria-controls="panel-suggestions">
+          Suggestions
+        </button>
         <button id="tab-upload" class="tab" role="tab" aria-selected="false" aria-controls="panel-upload">
           Upload
         </button>
@@ -53,6 +56,59 @@
                   aria-controls="fridge-groups" aria-expanded="true" hidden>Hide items ▴</button>
           <div id="fridge-groups" class="fridge-groups"></div>
           <p id="fridge-unidentified" class="muted small" hidden></p>
+        </div>
+      </div>
+
+      <!-- Suggestions panel: recipes + use-soon + shopping, from the current inventory
+           and user-entered use-by dates. Ranked by the embedding-based recommender. -->
+      <div id="panel-suggestions" class="tab-panel" role="tabpanel" aria-labelledby="tab-suggestions" hidden>
+        <div class="suggest-head">
+          <p class="muted small">Recipe ideas from what you have, what to use first, and a short shopping list.</p>
+          <button id="refresh-suggestions" class="btn btn-secondary" type="button">Refresh</button>
+        </div>
+
+        <!-- Track "use by" dates -->
+        <div class="perish-tracker">
+          <h3 class="section-title">Track a “use by” date</h3>
+          <p class="muted small">Add perishables (paneer, milk…) with the date on the pack, so we can remind you to use them in time.</p>
+          <form id="perish-form" class="perish-form">
+            <input id="perish-name" class="perish-input" type="text" placeholder="e.g. Paneer" maxlength="80" autocomplete="off" aria-label="Item name" required />
+            <input id="perish-date" class="perish-input perish-date" type="date" aria-label="Use-by date" required />
+            <button class="btn btn-primary" type="submit">Add</button>
+          </form>
+          <p id="perish-error" class="error-banner" role="alert" hidden></p>
+          <ul id="perish-list" class="perish-list"></ul>
+          <p id="perish-empty" class="muted small" hidden>No tracked items yet — add one above.</p>
+        </div>
+
+        <div id="suggest-loading" class="loading" role="status" aria-live="polite" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Building suggestions…</span>
+        </div>
+        <p id="suggest-error" class="error-banner" role="alert" hidden></p>
+
+        <div id="suggest-body" hidden>
+          <!-- Use soon -->
+          <div id="use-soon-section" class="suggest-section" hidden>
+            <h3 class="section-title">Use soon <span id="use-soon-count" class="count-pill"></span></h3>
+            <div id="use-soon-list" class="use-soon-list"></div>
+          </div>
+
+          <!-- Recipes -->
+          <div id="recipes-section" class="suggest-section">
+            <h3 class="section-title">Cook now <span id="recipes-count" class="count-pill"></span></h3>
+            <p id="recipes-empty" class="muted" hidden>Scan your fridge (or add some use-by items) to get recipe ideas.</p>
+            <div id="recipes-list" class="recipes-list"></div>
+          </div>
+
+          <!-- Shopping -->
+          <div id="shopping-section" class="suggest-section" hidden>
+            <h3 class="section-title">Worth buying</h3>
+            <p class="muted small">A few ingredients that would unlock the most recipes you're close to making.</p>
+            <div id="shopping-list" class="shopping-list"></div>
+          </div>
+
+          <p id="suggest-ml" class="muted small suggest-ml"></p>
         </div>
       </div>
 
@@ -141,7 +197,7 @@
   </main>
 
   <footer class="site-footer">
-    <p class="muted small">SmartFridge Vision · Phase 2 · Live inventory + scan history. Shopping lists and agents come next.</p>
+    <p class="muted small">SmartFridge Vision · Live inventory, scan history, and recipe suggestions.</p>
   </footer>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

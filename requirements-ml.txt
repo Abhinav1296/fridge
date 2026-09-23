@@ -1,0 +1,13 @@
+# Offline-only dependencies for TRAINING the ingredient embeddings.
+#
+# You do NOT need these to run the web app. The app and the recommender read the
+# already-trained vectors (data/ingredient_embeddings.json) with pure Python.
+# numpy is required only to (re)train those vectors with build_embeddings.py:
+#
+#     pip install -r requirements-ml.txt
+#     python build_embeddings.py     # regenerate data/ingredient_embeddings.json
+#
+# Keeping this separate from requirements.txt is deliberate: it keeps the deployed
+# app (Vercel) lightweight — it never installs numpy.
+
+numpy>=1.26

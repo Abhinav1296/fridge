@@ -8,10 +8,13 @@ A thin HTTP wrapper around :mod:`vision_service` and :mod:`storage`:
   the result to the history database, and returns the parsed inventory as JSON.
 * ``GET  /api/current`` returns the current fridge inventory (the most recent scan).
 * ``GET  /api/history`` returns recent scans (timestamped inventory history) as JSON.
+* ``GET  /api/recommendations`` returns recipe / use-soon / shopping suggestions built by
+  :mod:`recommender` from the current inventory plus tracked "use by" dates.
+* ``/api/perishables`` (GET/POST/DELETE) manages the user's tracked "use by" dates.
 
 The web layer owns request/response concerns only. All vision logic lives in
-:mod:`vision_service` and all persistence in :mod:`storage`, so a future agent layer can
-bypass HTTP entirely.
+:mod:`vision_service`, recommendation logic in :mod:`recommender`, and persistence in
+:mod:`storage`, so a future agent layer can bypass HTTP entirely.
 """
 
 from __future__ import annotations
@@ -21,11 +24,13 @@ import binascii
 import io
 import logging
 import re
+from datetime import datetime
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 from PIL import Image, UnidentifiedImageError
 
+import recommender
 import storage
 import vision_service
 from vision_service import (
@@ -152,6 +157,99 @@ def api_history():
         logger.exception("Failed to read history")
         return jsonify({"error": "Couldn't load history right now."}), 500
     return jsonify({"scans": scans})
+
+
+@app.get("/api/recommendations")
+def api_recommendations():
+    """Return recipe / use-soon / shopping suggestions for the current fridge.
+
+    Combines the latest scan (what's visibly in the fridge) with the user's tracked
+    "use by" dates, and runs the embedding-based recommender over both. Returns empty
+    lists (not an error) when there's nothing to suggest yet.
+    """
+    try:
+        scan = storage.get_latest_scan()
+        perishables = storage.list_perishables()
+    except Exception:  # noqa: BLE001 — a read failure shouldn't 500 the whole page
+        logger.exception("Failed to load data for recommendations")
+        return jsonify({"error": "Couldn't load suggestions right now."}), 500
+
+    items = (scan or {}).get("items", [])
+    try:
+        result = recommender.recommend(items, perishables)
+    except Exception:  # noqa: BLE001 — recommender must never take the page down
+        logger.exception("Recommender failed")
+        return jsonify({"error": "Couldn't build suggestions right now."}), 500
+    return jsonify(result)
+
+
+@app.get("/api/perishables")
+def api_list_perishables():
+    """Return the user's tracked perishables (soonest use-by first)."""
+    try:
+        perishables = storage.list_perishables()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to list perishables")
+        return jsonify({"error": "Couldn't load your tracked items right now."}), 500
+    return jsonify({"perishables": perishables})
+
+
+@app.post("/api/perishables")
+def api_add_perishable():
+    """Track a perishable with a "use by" date. Body: ``{"name": str, "use_by": "YYYY-MM-DD"}``."""
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name", "")).strip()
+    use_by = str(payload.get("use_by", "")).strip()
+
+    if not name:
+        return jsonify({"error": "Please enter what the item is."}), 400
+    if len(name) > 80:
+        return jsonify({"error": "That name is too long."}), 400
+    if not _valid_use_by(use_by):
+        return jsonify({"error": "Please enter a valid use-by date (YYYY-MM-DD)."}), 400
+
+    try:
+        perishable_id = storage.add_perishable(name, use_by)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to add perishable")
+        return jsonify({"error": "Couldn't save that item right now."}), 500
+    return (
+        jsonify({"perishable": {"id": perishable_id, "name": name, "use_by": use_by}}),
+        201,
+    )
+
+
+@app.delete("/api/perishables/<int:perishable_id>")
+def api_delete_perishable(perishable_id: int):
+    """Stop tracking one perishable."""
+    try:
+        removed = storage.delete_perishable(perishable_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to delete perishable %s", perishable_id)
+        return jsonify({"error": "Couldn't remove that item right now."}), 500
+    if not removed:
+        return jsonify({"error": "That item was not found."}), 404
+    return jsonify({"deleted": True})
+
+
+@app.delete("/api/perishables")
+def api_clear_perishables():
+    """Stop tracking all perishables."""
+    try:
+        cleared = storage.clear_perishables()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to clear perishables")
+        return jsonify({"error": "Couldn't clear your tracked items right now."}), 500
+    return jsonify({"cleared": cleared})
+
+
+def _valid_use_by(value: str) -> bool:
+    """True if ``value`` is a real calendar date in ``YYYY-MM-DD`` form."""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
 
 
 @app.errorhandler(413)
