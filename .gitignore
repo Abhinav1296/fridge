@@ -12,6 +12,12 @@ __pycache__/
 *.egg-info/
 .eggs/
 
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
 # Virtual environments
 .venv/
 venv/
@@ -23,3 +29,7 @@ ENV/
 Thumbs.db
 .vscode/
 .idea/
+
+# Claude Code — ignore local session artifacts, keep the shared launch config
+.claude/*
+!.claude/launch.json
