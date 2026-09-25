@@ -80,6 +80,56 @@ def test_run_agent_raises_without_key(monkeypatch):
         agent.run_agent("hi", tools={})
 
 
+# --- Model fallback -----------------------------------------------------------
+
+
+OPENROUTER = "https://openrouter.ai/api/v1"
+
+
+def _scanner_slots(monkeypatch):
+    """A primary whose free model was retired, plus two scanner backup providers."""
+    monkeypatch.setenv("VISION_API_KEY", "k1")
+    monkeypatch.setenv("VISION_BASE_URL", OPENROUTER)
+    monkeypatch.setenv("VISION_MODEL", "retired:free")
+    monkeypatch.setenv("VISION_MODEL_2", "backup-a:free")        # inherits key + URL
+    monkeypatch.setenv("VISION_API_KEY_3", "k3")
+    monkeypatch.setenv("VISION_BASE_URL_3", "https://other.example/v1/")
+    monkeypatch.setenv("VISION_MODEL_3", "backup-b")
+
+
+def test_models_fall_back_to_the_scanners_backup_providers(monkeypatch):
+    _scanner_slots(monkeypatch)
+    monkeypatch.setenv("LLM_MODEL_2", "text-backup:free")
+    models = [(m.api_key, m.base_url, m.model) for m in agent._load_models()]
+    assert models == [
+        ("k1", OPENROUTER, "retired:free"),              # the primary (not repeated below)
+        ("k1", OPENROUTER, "text-backup:free"),          # LLM_* fallbacks come first
+        ("k1", OPENROUTER, "backup-a:free"),             # then the scanner's backups
+        ("k3", "https://other.example/v1", "backup-b"),
+    ]
+
+
+def test_a_failed_model_is_tried_last_until_it_cools_down(monkeypatch):
+    _scanner_slots(monkeypatch)
+    tried = []
+
+    def transport(base_url, api_key, payload):
+        tried.append(payload["model"])
+        if payload["model"] == "retired:free":
+            raise agent.AgentAPIError("gone")
+        return {"choices": [{"message": {"content": "ok", "tool_calls": None}}]}
+
+    monkeypatch.setattr(agent, "_post_chat", transport)
+    assert agent.complete("hi", system="s") == "ok"
+    assert agent.complete("hi again", system="s") == "ok"
+    assert tried == ["retired:free", "backup-a:free", "backup-a:free"]
+
+    monkeypatch.setattr(agent, "_FAILURE_COOLDOWN_S", 0)   # cooled down: back to first
+    tried.clear()
+    agent.complete("and again", system="s")
+    assert tried[0] == "retired:free"
+
+
 # --- Native tool-calling mode -----------------------------------------------
 
 
@@ -213,7 +263,9 @@ def test_build_default_tools_plan_meals(monkeypatch):
         list_perishables=lambda: [],
         list_nutrition=lambda: [],
     )
-    assert set(tools) == {"get_inventory", "get_recommendations", "plan_meals"}
+    assert set(tools) == {
+        "get_inventory", "get_recommendations", "plan_meals", "autopilot_week"
+    }
 
     inv = tools["get_inventory"].run({})
     assert inv["item_count"] == 3
@@ -221,3 +273,15 @@ def test_build_default_tools_plan_meals(monkeypatch):
     plan = tools["plan_meals"].run({"days": 1, "meals_per_day": 2})
     assert plan["solver"] in ("ilp", "greedy")
     assert "waste_avoided_pct" in plan["metrics"]
+    # The plan is priced and day-grouped for the Autopilot UI.
+    assert "shopping_cost" in plan["metrics"]
+    assert isinstance(plan["by_day"], list)
+
+    # A budget cap is honoured through the tool layer.
+    capped = tools["plan_meals"].run({"days": 3, "meals_per_day": 2, "budget": 10})
+    assert capped["metrics"]["shopping_cost"] <= 10 + 1e-6
+    assert capped["metrics"]["within_budget"] is True
+
+    # The week planner fills a 7-day horizon.
+    week = tools["autopilot_week"].run({"meals_per_day": 2})
+    assert week["horizon"]["days"] == 7

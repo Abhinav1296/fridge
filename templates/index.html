@@ -1,70 +1,155 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SmartFridge Vision</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eaf6ff" />
+  <meta name="description" content="Frost — the SmartFridge Vision app. Scan your fridge, cut food waste, and cook what you have." />
+  <title>Frost · your fridge, brilliant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄️</text></svg>" />
 </head>
 <body>
-  <header class="site-header">
-    <h1>🧊 SmartFridge Vision</h1>
-    <p class="tagline">Snap or upload a photo of your fridge — get a structured inventory with freshness.</p>
-    <span id="live-status" class="live-status" data-state="connecting" title="Real-time updates across your open tabs" hidden>
-      <span class="live-dot" aria-hidden="true"></span>
-      <span id="live-label" class="live-label">Connecting…</span>
-    </span>
-  </header>
+  <!-- Icon sprite: defined once, referenced everywhere via <use>. Keeps the nav crisp
+       and DRY (one source per glyph, inherits currentColor). -->
+  <svg width="0" height="0" class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="ic-fridge" viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M5 10h14"/><path d="M8.5 6v1.5"/><path d="M8.5 13v2"/></symbol>
+    <symbol id="ic-recipes" viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"/><path d="M9 4v14"/><path d="M12.5 8.5h3.5"/></symbol>
+    <symbol id="ic-scan" viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M20 16v2a2 2 0 0 1-2 2h-2"/><path d="M8 20H6a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3.2"/></symbol>
+    <symbol id="ic-chef" viewBox="0 0 24 24"><path d="M7 15.5a3.5 3.5 0 0 1-1-6.86A4 4 0 0 1 14 7a3.5 3.5 0 0 1 3 6.5"/><path d="M7 15.5V20h10v-6"/><path d="M7 18h10"/></symbol>
+    <symbol id="ic-cart" viewBox="0 0 24 24"><circle cx="9.5" cy="19.5" r="1.4"/><circle cx="17" cy="19.5" r="1.4"/><path d="M3 4h2l2.2 11h10L20 7H6.5"/></symbol>
+    <symbol id="ic-plan" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2.5"/><path d="M4 9.5h16"/><path d="M8 3v4"/><path d="M16 3v4"/><path d="M8 14h3"/></symbol>
+    <symbol id="ic-insights" viewBox="0 0 24 24"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5" rx="1"/><rect x="12.5" y="8" width="3" height="9" rx="1"/><rect x="18" y="14" width="0.1" height="3"/></symbol>
+    <symbol id="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"/></symbol>
+    <symbol id="ic-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
+    <symbol id="ic-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="ic-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="ic-bolt" viewBox="0 0 24 24"><path d="M13 3 5 13h6l-1 8 8-10h-6z"/></symbol>
+  </svg>
 
-  <div id="live-toast" class="live-toast" role="status" aria-live="polite" hidden></div>
+  <!-- Frost particles drift behind everything (canvas, drawn by app.js). Reduced-motion
+       and no-JS both leave it blank. -->
+  <canvas id="frost-canvas" class="frost-canvas" aria-hidden="true"></canvas>
+  <!-- Blurred ice-blue blobs — the ambient glow of the whole app. -->
+  <div class="aurora" aria-hidden="true">
+    <span class="blob blob-1"></span>
+    <span class="blob blob-2"></span>
+    <span class="blob blob-3"></span>
+  </div>
 
-  <main class="container">
-    <!-- Input source tabs -->
-    <section class="panel" aria-label="Image source">
-      <div class="tabs" role="tablist">
-        <button id="tab-fridge" class="tab active" role="tab" aria-selected="true" aria-controls="panel-fridge">
-          My Fridge
-        </button>
-        <button id="tab-suggestions" class="tab" role="tab" aria-selected="false" aria-controls="panel-suggestions">
-          Suggestions
-        </button>
-        <button id="tab-plan" class="tab" role="tab" aria-selected="false" aria-controls="panel-plan">
-          Meal Plan
-        </button>
-        <button id="tab-nutrition" class="tab" role="tab" aria-selected="false" aria-controls="panel-nutrition">
-          Nutrition
-        </button>
-        <button id="tab-analytics" class="tab" role="tab" aria-selected="false" aria-controls="panel-analytics">
-          Analytics
-        </button>
-        <button id="tab-chef" class="tab" role="tab" aria-selected="false" aria-controls="panel-chef">
-          Chef
-        </button>
-        <button id="tab-upload" class="tab" role="tab" aria-selected="false" aria-controls="panel-upload">
-          Upload
-        </button>
-        <button id="tab-webcam" class="tab" role="tab" aria-selected="false" aria-controls="panel-webcam">
-          Webcam
-        </button>
-        <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">
-          History
-        </button>
+  <div class="app-shell">
+
+    <!-- ===== Laptop: frosted sidebar ===== -->
+    <aside class="sidebar" id="sidebar" aria-label="Primary">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">❄</span>
+        <span class="brand-name">Frost</span>
       </div>
 
-      <!-- Fridge panel: the current inventory (most recent scan) -->
-      <div id="panel-fridge" class="tab-panel" role="tabpanel" aria-labelledby="tab-fridge">
-        <div class="fridge-head">
-          <p id="fridge-asof" class="muted small">Your most recent scan is your current inventory.</p>
-          <button id="refresh-fridge" class="btn btn-secondary" type="button">Refresh</button>
+      <nav class="nav" id="nav" aria-label="Sections">
+        <button class="nav-item" type="button" data-dest="fridge">
+          <svg class="ic" aria-hidden="true"><use href="#ic-fridge"/></svg><span>My Fridge</span>
+        </button>
+        <button class="nav-item" type="button" data-dest="recipes">
+          <svg class="ic" aria-hidden="true"><use href="#ic-recipes"/></svg><span>Recipes</span>
+        </button>
+        <button class="nav-item nav-scan" type="button" data-dest="scan">
+          <svg class="ic" aria-hidden="true"><use href="#ic-scan"/></svg><span>Scan</span>
+        </button>
+        <button class="nav-item" type="button" data-dest="chef">
+          <svg class="ic" aria-hidden="true"><use href="#ic-chef"/></svg><span>Chef</span>
+        </button>
+        <button class="nav-item" type="button" data-dest="cart">
+          <svg class="ic" aria-hidden="true"><use href="#ic-cart"/></svg><span>Cart</span>
+          <span id="nav-cart-count" class="nav-badge" hidden></span>
+        </button>
+        <button class="nav-item" type="button" data-dest="plan">
+          <svg class="ic" aria-hidden="true"><use href="#ic-plan"/></svg><span>Plan</span>
+        </button>
+        <button class="nav-item" type="button" data-dest="insights">
+          <svg class="ic" aria-hidden="true"><use href="#ic-insights"/></svg><span>Insights</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span id="live-status" class="live-status" data-state="connecting" title="Real-time updates across your open tabs" hidden>
+          <span class="live-dot" aria-hidden="true"></span>
+          <span id="live-label" class="live-label">Connecting…</span>
+        </span>
+        <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch between light and dark" title="Toggle dark mode">
+          <svg class="ic ic-sun" aria-hidden="true"><use href="#ic-sun"/></svg>
+          <svg class="ic ic-moon" aria-hidden="true"><use href="#ic-moon"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- ===== Phone: top bar ===== -->
+    <header class="topbar" id="topbar">
+      <button id="menu-btn" class="icon-btn topbar-menu" type="button" aria-label="More sections" aria-haspopup="true" aria-expanded="false">
+        <svg class="ic" aria-hidden="true"><use href="#ic-menu"/></svg>
+      </button>
+      <div class="brand brand-top">
+        <span class="brand-mark" aria-hidden="true">❄</span>
+        <span class="brand-name">Frost</span>
+      </div>
+      <button id="theme-toggle-m" class="theme-toggle theme-toggle-m" type="button" aria-label="Switch between light and dark">
+        <svg class="ic ic-sun" aria-hidden="true"><use href="#ic-sun"/></svg>
+        <svg class="ic ic-moon" aria-hidden="true"><use href="#ic-moon"/></svg>
+      </button>
+    </header>
+
+    <!-- ===== Main content ===== -->
+    <main class="content" id="content">
+      <div class="led-strip" aria-hidden="true"></div>
+
+      <!-- transient "just updated" toast -->
+      <div id="live-toast" class="live-toast" role="status" aria-live="polite" hidden></div>
+
+      <!-- =========================== MY FRIDGE =========================== -->
+      <section class="dest" id="dest-fridge" aria-label="My Fridge">
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>My Fridge</h1>
+            <p class="dest-sub">Your latest scan is your live inventory.</p>
+          </div>
+          <div class="head-buttons">
+            <button id="briefing-check" class="btn btn-secondary" type="button"
+                    title="Have Chef look over your fridge right now">Check now</button>
+            <button id="refresh-fridge" class="btn btn-ghost" type="button">Refresh</button>
+          </div>
         </div>
+        <p id="fridge-asof" class="muted small dest-asof">Your most recent scan is your current inventory.</p>
+
+        <!-- Chef's proactive briefing -->
+        <section id="briefing" class="briefing glass" aria-label="Chef's briefing" aria-live="polite" hidden>
+          <div class="briefing-top">
+            <span class="briefing-avatar" aria-hidden="true">
+              <svg class="ic" aria-hidden="true"><use href="#ic-chef"/></svg>
+            </span>
+            <div class="briefing-main">
+              <p class="briefing-kicker">Chef noticed <span id="briefing-when" class="briefing-when"></span></p>
+              <p id="briefing-headline" class="briefing-headline"></p>
+            </div>
+            <button id="briefing-dismiss" class="icon-btn" type="button" aria-label="Dismiss Chef's briefing">
+              <svg class="ic" aria-hidden="true"><use href="#ic-close"/></svg>
+            </button>
+          </div>
+          <ul id="briefing-lines" class="briefing-lines"></ul>
+          <div id="briefing-actions" class="action-list"></div>
+        </section>
+        <p id="briefing-error" class="error-banner" role="alert" hidden></p>
+
         <div id="fridge-loading" class="loading" role="status" aria-live="polite" hidden>
           <span class="spinner" aria-hidden="true"></span>
           <span>Loading your fridge…</span>
         </div>
-        <div id="fridge-empty" class="fridge-empty" hidden>
+        <div id="fridge-empty" class="fridge-empty glass" hidden>
+          <span class="empty-orb" aria-hidden="true">❄</span>
           <p class="muted">Nothing here yet — scan your fridge and its contents show up here as your live inventory.</p>
-          <button id="fridge-scan-cta" class="btn btn-primary" type="button">📷 Scan your fridge</button>
+          <button id="fridge-scan-cta" class="btn btn-primary" type="button">Scan your fridge</button>
         </div>
         <p id="fridge-error" class="error-banner" role="alert" hidden></p>
         <div id="fridge-body" hidden>
@@ -75,42 +160,43 @@
           <div id="fridge-groups" class="fridge-groups"></div>
           <p id="fridge-unidentified" class="muted small" hidden></p>
         </div>
-      </div>
+      </section>
 
-      <!-- Suggestions panel: recipes + use-soon + shopping, from the current inventory
-           and user-entered use-by dates. Ranked by the embedding-based recommender. -->
-      <div id="panel-suggestions" class="tab-panel" role="tabpanel" aria-labelledby="tab-suggestions" hidden>
-        <div class="suggest-head">
-          <p class="muted small">Recipe ideas from what you have, what to use first, and a short shopping list.</p>
-          <button id="refresh-suggestions" class="btn btn-secondary" type="button">Refresh</button>
+      <!-- =========================== RECIPES =========================== -->
+      <section class="dest" id="dest-recipes" aria-label="Recipes" hidden>
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>Recipes</h1>
+            <p class="dest-sub">Cook from what you have, use up what's expiring, buy less.</p>
+          </div>
+          <button id="refresh-suggestions" class="btn btn-ghost" type="button">Refresh</button>
         </div>
 
-        <!-- Track "use by" dates -->
-        <div class="perish-tracker">
-          <h3 class="section-title">Track a “use by” date</h3>
-          <p class="muted small">Add perishables (paneer, milk…) with the date on the pack, so we can remind you to use them in time.</p>
-          <form id="perish-form" class="perish-form">
-            <input id="perish-name" class="perish-input" type="text" placeholder="e.g. Paneer" maxlength="80" autocomplete="off" aria-label="Item name" required />
-            <input id="perish-date" class="perish-input perish-date" type="date" aria-label="Use-by date" required />
-            <button class="btn btn-primary" type="submit">Add</button>
-          </form>
-          <p id="perish-error" class="error-banner" role="alert" hidden></p>
-          <ul id="perish-list" class="perish-list"></ul>
-          <p id="perish-empty" class="muted small" hidden>No tracked items yet — add one above.</p>
-        </div>
-
-        <!-- Semantic recipe search — finds any recipe by meaning using the
-             ingredient-embedding vector index (vectorstore.py), not just keywords. -->
-        <div class="recipe-search">
-          <h3 class="section-title">🔎 Find a recipe</h3>
+        <!-- Semantic recipe search -->
+        <div class="recipe-search glass card-pad">
+          <h3 class="section-title">Find a recipe</h3>
           <p class="muted small">Search every recipe by meaning — try “creamy paneer dinner” or “quick vegetarian breakfast”, not just exact names.</p>
           <form id="recipe-search-form" class="recipe-search-form" role="search">
-            <input id="recipe-search-input" class="recipe-search-input perish-input" type="search" placeholder="What do you feel like cooking?" maxlength="120" autocomplete="off" aria-label="Search recipes" />
+            <input id="recipe-search-input" class="recipe-search-input field" type="search" placeholder="What do you feel like cooking?" maxlength="120" autocomplete="off" aria-label="Search recipes" />
             <button class="btn btn-primary" type="submit">Search</button>
           </form>
           <p id="recipe-search-error" class="error-banner" role="alert" hidden></p>
           <p id="recipe-search-status" class="muted small recipe-search-status" hidden></p>
           <div id="recipe-search-results" class="recipes-list"></div>
+        </div>
+
+        <!-- Track "use by" dates -->
+        <div class="perish-tracker glass card-pad">
+          <h3 class="section-title">Track a “use by” date</h3>
+          <p class="muted small">Add perishables (paneer, milk…) with the date on the pack, so we can remind you to use them in time.</p>
+          <form id="perish-form" class="perish-form">
+            <input id="perish-name" class="perish-input field" type="text" placeholder="e.g. Paneer" maxlength="80" autocomplete="off" aria-label="Item name" required />
+            <input id="perish-date" class="perish-input field perish-date" type="date" aria-label="Use-by date" required />
+            <button class="btn btn-primary" type="submit">Add</button>
+          </form>
+          <p id="perish-error" class="error-banner" role="alert" hidden></p>
+          <ul id="perish-list" class="perish-list"></ul>
+          <p id="perish-empty" class="muted small" hidden>No tracked items yet — add one above.</p>
         </div>
 
         <div id="suggest-loading" class="loading" role="status" aria-live="polite" hidden>
@@ -120,20 +206,17 @@
         <p id="suggest-error" class="error-banner" role="alert" hidden></p>
 
         <div id="suggest-body" hidden>
-          <!-- Use soon -->
           <div id="use-soon-section" class="suggest-section" hidden>
             <h3 class="section-title">Use soon <span id="use-soon-count" class="count-pill"></span></h3>
             <div id="use-soon-list" class="use-soon-list"></div>
           </div>
 
-          <!-- Recipes -->
           <div id="recipes-section" class="suggest-section">
             <h3 class="section-title">Cook now <span id="recipes-count" class="count-pill"></span></h3>
             <p id="recipes-empty" class="muted" hidden>Scan your fridge (or add some use-by items) to get recipe ideas.</p>
             <div id="recipes-list" class="recipes-list"></div>
           </div>
 
-          <!-- Shopping -->
           <div id="shopping-section" class="suggest-section" hidden>
             <h3 class="section-title">Worth buying</h3>
             <p class="muted small">A few ingredients that would unlock the most recipes you're close to making.</p>
@@ -142,269 +225,557 @@
 
           <p id="suggest-ml" class="muted small suggest-ml"></p>
         </div>
-      </div>
+      </section>
 
-      <!-- Meal Plan panel: a zero-waste plan for the next few days, solved as an integer
-           program (optimizer.py) — which dishes to cook so the least food is wasted and the
-           least has to be bought, respecting per-ingredient stock as a scarce resource. -->
-      <div id="panel-plan" class="tab-panel" role="tabpanel" aria-labelledby="tab-plan" hidden>
-        <div class="plan-head">
-          <p class="muted small">A zero-waste plan that picks dishes to use up what's expiring first — solved as an optimization over your actual stock, not just a ranked list.</p>
-          <div class="plan-controls">
-            <label class="plan-field">Days
-              <select id="plan-days" class="plan-select" aria-label="Days to plan">
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3" selected>3</option>
-                <option value="4">4</option>
-                <option value="5">5</option>
-                <option value="6">6</option>
-                <option value="7">7</option>
-              </select>
-            </label>
-            <label class="plan-field">Meals/day
-              <select id="plan-meals" class="plan-select" aria-label="Meals per day">
-                <option value="1">1</option>
-                <option value="2" selected>2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-              </select>
-            </label>
-            <button id="plan-build" class="btn btn-primary" type="button">Build plan</button>
+      <!-- =========================== SCAN (upload + webcam) =========================== -->
+      <section class="dest" id="dest-scan" aria-label="Scan" hidden>
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>Scan</h1>
+            <p class="dest-sub">Snap or upload a photo of your fridge — get a structured inventory with freshness.</p>
           </div>
         </div>
 
-        <div id="plan-loading" class="loading" role="status" aria-live="polite" hidden>
-          <span class="spinner" aria-hidden="true"></span>
-          <span>Optimizing your meal plan…</span>
-        </div>
-        <p id="plan-error" class="error-banner" role="alert" hidden></p>
-
-        <div id="plan-body" hidden>
-          <div id="plan-metrics" class="plan-metrics"></div>
-          <div id="plan-notes" class="plan-notes"></div>
-          <p id="plan-empty" class="muted" hidden>No cookable plan yet — scan your fridge (or add a few tracked items) and build again.</p>
-          <div id="plan-meals-list" class="plan-meals-list"></div>
-
-          <div id="plan-shopping-section" class="plan-section" hidden>
-            <h3 class="section-title">Shopping list <span id="plan-shopping-count" class="count-pill"></span></h3>
-            <p class="muted small">Buy these once — each is reused across every dish that needs it.</p>
-            <div id="plan-shopping" class="shopping-list"></div>
-          </div>
-
-          <div id="plan-atrisk-section" class="plan-section" hidden>
-            <h3 class="section-title">Still at risk</h3>
-            <p class="muted small">No dish in this plan uses these up — eat them fresh or freeze them.</p>
-            <div id="plan-atrisk" class="use-soon-list"></div>
-          </div>
-
-          <div id="plan-nutrition-section" class="plan-section" hidden>
-            <h3 class="section-title">Estimated nutrition</h3>
-            <div id="plan-nutrition" class="plan-nutrition"></div>
-            <p id="plan-nutrition-basis" class="muted small"></p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Nutrition panel: a dashboard of real per-100 g macros for what's in the fridge,
-           pulled from Open Food Facts (nutrition.py) and cached, plus a barcode scanner for
-           packaged goods. The same cached rows feed the meal-plan nutrition summary. -->
-      <div id="panel-nutrition" class="tab-panel" role="tabpanel" aria-labelledby="tab-nutrition" hidden>
-        <div class="nutri-head">
-          <p class="muted small">Real nutrition for what you have, from <strong>Open Food Facts</strong> — a free, open food database. Figures are per 100&nbsp;g and cached, so they also power the meal plan's nutrition estimate.</p>
-          <button id="nutri-refresh" class="btn btn-primary" type="button">Refresh from Open Food Facts</button>
+        <div class="segmented" role="tablist" aria-label="Scan source">
+          <button id="scan-mode-upload" class="seg active" type="button" role="tab" aria-selected="true" data-mode="upload">Upload</button>
+          <button id="scan-mode-webcam" class="seg" type="button" role="tab" aria-selected="false" data-mode="webcam">Webcam</button>
         </div>
 
-        <!-- Barcode scanner: look up a packaged product by its barcode. Uses the browser's
-             BarcodeDetector when available, with manual entry as a always-present fallback. -->
-        <div class="barcode-box">
-          <h3 class="section-title">Scan a packaged product</h3>
-          <p class="muted small">Point your camera at a barcode, or type the number. We look it up on Open Food Facts and cache its nutrition.</p>
-          <form id="barcode-form" class="barcode-form">
-            <input id="barcode-input" class="barcode-input" type="text" inputmode="numeric"
-                   pattern="[0-9]*" maxlength="14" placeholder="e.g. 3017620422003"
-                   autocomplete="off" aria-label="Barcode number" />
-            <button id="barcode-lookup" class="btn btn-secondary" type="submit">Look up</button>
-            <button id="barcode-scan" class="btn btn-secondary" type="button" hidden>📷 Scan</button>
-            <button id="barcode-stop" class="btn btn-ghost" type="button" hidden>Stop</button>
+        <!-- Upload -->
+        <div id="panel-upload" class="scan-panel">
+          <div id="dropzone" class="dropzone glass" tabindex="0" role="button"
+               aria-label="Drag and drop an image here, or click to choose a file">
+            <div class="dropzone-inner">
+              <span class="dropzone-icon" aria-hidden="true">
+                <svg class="ic" aria-hidden="true"><use href="#ic-scan"/></svg>
+              </span>
+              <p><strong>Drag &amp; drop</strong> an image here</p>
+              <p class="muted">or click to choose a file</p>
+            </div>
+            <input id="file-input" type="file" accept="image/*" hidden />
+          </div>
+        </div>
+
+        <!-- Webcam -->
+        <div id="panel-webcam" class="scan-panel" hidden>
+          <div class="webcam-wrap glass">
+            <video id="video" playsinline autoplay muted></video>
+          </div>
+          <div class="webcam-controls">
+            <button id="start-camera" class="btn btn-secondary" type="button">Start camera</button>
+            <button id="capture" class="btn btn-primary" type="button" disabled>Capture frame</button>
+          </div>
+          <p id="webcam-hint" class="muted small">Your browser will ask for camera permission. Nothing is recorded — a single frame is captured when you press Capture.</p>
+          <canvas id="canvas" hidden></canvas>
+        </div>
+
+        <!-- Capture flow (shared): preview, loading, error, results -->
+        <div id="capture-extras" class="contents">
+          <section id="preview-section" class="panel glass card-pad" aria-label="Preview" hidden>
+            <h2 class="section-title">Preview</h2>
+            <div class="preview-row">
+              <img id="preview" class="preview-img" alt="Selected image preview" />
+              <div class="preview-actions">
+                <button id="analyze" class="btn btn-primary" type="button">Analyze image</button>
+                <button id="clear" class="btn btn-ghost" type="button">Clear</button>
+              </div>
+            </div>
+          </section>
+
+          <div id="loading" class="loading" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Analyzing image…</span>
+          </div>
+
+          <div id="error" class="error-banner" role="alert" hidden></div>
+
+          <section id="results-section" class="results" aria-label="Inventory results" hidden>
+            <h2 class="section-title">Inventory <span id="item-count" class="count-pill"></span></h2>
+            <div id="cards" class="cards"></div>
+            <p id="no-items" class="muted" hidden>No food items were detected in this image.</p>
+
+            <div id="unidentified-section" hidden>
+              <h2 class="section-title">Needs your input</h2>
+              <p class="muted small">These items couldn't be identified from the photo. Later phases will let you resolve them — for now they're shown for reference.</p>
+              <div id="unidentified-cards" class="cards"></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Stock up from a receipt: paste the printed text, preview what we found, add it in. -->
+        <section id="receipt-card" class="panel glass card-pad receipt-card" aria-labelledby="receipt-title">
+          <div class="chef-card-head">
+            <h2 id="receipt-title" class="section-title">
+              <svg class="ic receipt-ic" aria-hidden="true"><use href="#ic-cart"/></svg>
+              Stock up from a receipt
+            </h2>
+          </div>
+          <p class="muted small">Just back from the shop? Paste your receipt text below and Chef will read off the groceries and add them to your fridge — no photo needed.</p>
+          <form id="receipt-form" class="receipt-form">
+            <textarea id="receipt-text" class="field receipt-text" rows="6" maxlength="20000"
+                      placeholder="Paste receipt text here — e.g.&#10;Amul Milk 500ml  2 x 27.00  54.00&#10;Tomato 1kg  40.00&#10;Paneer 200g  80.00"
+                      aria-label="Receipt text"></textarea>
+            <div class="receipt-actions">
+              <button id="receipt-preview" class="btn btn-primary" type="submit">Preview items</button>
+              <button id="receipt-clear" class="btn btn-ghost" type="button" hidden>Clear</button>
+            </div>
           </form>
-          <div id="barcode-camera" class="barcode-camera" hidden>
-            <video id="barcode-video" playsinline autoplay muted></video>
-            <p class="muted small">Hold the barcode steady in view…</p>
+          <p id="receipt-error" class="error-banner" role="alert" hidden></p>
+          <p id="receipt-added" class="ok-banner" role="status" hidden></p>
+
+          <div id="receipt-result" hidden>
+            <div class="receipt-result-head">
+              <h3 class="chef-subtitle">Found <span id="receipt-count" class="count-pill"></span></h3>
+              <p id="receipt-summary" class="muted small"></p>
+            </div>
+            <p class="muted small">Untick anything you don't want. Items we didn't recognise are marked <span class="receipt-unsure-tag">unsure</span> — you can still add them.</p>
+            <div id="receipt-list" class="receipt-list"></div>
+            <div class="receipt-import-row">
+              <button id="receipt-import" class="btn btn-success" type="button">Add to fridge</button>
+              <span id="receipt-import-hint" class="muted small"></span>
+            </div>
           </div>
-          <p id="barcode-error" class="error-banner" role="alert" hidden></p>
-          <div id="barcode-result" class="barcode-result" hidden></div>
-        </div>
+        </section>
+      </section>
 
-        <div id="nutri-loading" class="loading" role="status" aria-live="polite" hidden>
-          <span class="spinner" aria-hidden="true"></span>
-          <span>Loading nutrition…</span>
-        </div>
-        <p id="nutri-error" class="error-banner" role="alert" hidden></p>
-
-        <div id="nutri-body" hidden>
-          <div id="nutri-metrics" class="plan-metrics"></div>
-          <p id="nutri-empty" class="muted" hidden>Scan your fridge (or add a few tracked items), then refresh to pull nutrition for what's on hand.</p>
-          <div id="nutri-table-section" class="nutri-section" hidden>
-            <h3 class="section-title">Per ingredient <span id="nutri-count" class="count-pill"></span></h3>
-            <p class="muted small">Per 100&nbsp;g. “Refresh from Open Food Facts” fills in anything still missing.</p>
-            <div id="nutri-table" class="nutri-table"></div>
+      <!-- =========================== CHEF =========================== -->
+      <section class="dest" id="dest-chef" aria-label="Chef" hidden>
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>Chef <span id="chef-mode" class="chef-mode" hidden></span></h1>
+            <p class="dest-sub">Your kitchen assistant. It checks your fridge, remembers your food rules, and <strong>prepares</strong> changes — nothing changes until you tap Confirm.</p>
           </div>
         </div>
-      </div>
 
-      <!-- Analytics panel: turns the waste log (storage.waste_log, populated when the user
-           marks tracked items "used" or "wasted") into a dashboard — waste rate, money lost
-           vs rescued, most-wasted ingredients, and a weekly trend (analytics.summarize). -->
-      <div id="panel-analytics" class="tab-panel" role="tabpanel" aria-labelledby="tab-analytics" hidden>
-        <div class="analytics-head">
-          <p class="muted small">See how much food you actually use versus throw away. Mark tracked items <strong>Used</strong> or <strong>Wasted</strong> on the Suggestions tab — or log one below — and it all rolls up here.</p>
-          <button id="analytics-refresh" class="btn btn-secondary" type="button">Refresh</button>
+        <div class="chef-grid">
+          <div class="chef-main glass card-pad">
+            <div id="chef-waiting" class="chef-waiting" hidden>
+              <h3 class="chef-subtitle">Waiting for your OK</h3>
+              <div id="chef-waiting-list" class="action-list"></div>
+            </div>
+
+            <div id="chef-log" class="chef-log" aria-live="polite">
+              <p id="chef-intro" class="muted small">Try: “I'm vegetarian and allergic to peanuts” · “I cooked palak paneer” · “Add milk to my shopping list” · “What should I use up first?”</p>
+            </div>
+            <p id="chef-error" class="error-banner" role="alert" hidden></p>
+            <form id="chef-form" class="chef-form">
+              <input id="chef-input" class="chef-input field" type="text" maxlength="1000"
+                     placeholder="Ask the Chef…" autocomplete="off" aria-label="Message the Chef" />
+              <button id="chef-send" class="btn btn-primary" type="submit">Ask</button>
+            </form>
+          </div>
+
+          <div class="chef-side">
+            <!-- Long-term memory: the household's rules -->
+            <section class="chef-card glass card-pad" aria-labelledby="mem-title">
+              <div class="chef-card-head">
+                <h3 id="mem-title" class="chef-subtitle">What Chef remembers</h3>
+                <button id="mem-clear" class="btn-link" type="button" hidden>Forget all</button>
+              </div>
+              <label class="mem-row" for="mem-diet">
+                <span class="mem-label">Diet</span>
+                <select id="mem-diet" class="mem-select field"></select>
+              </label>
+              <div class="mem-row">
+                <span class="mem-label">Allergies <span class="muted small">(never suggested)</span></span>
+                <div id="mem-allergies" class="chip-list"></div>
+                <form id="mem-allergy-form" class="mini-form" data-key="allergies">
+                  <input class="mini-input field" type="text" maxlength="60" placeholder="e.g. peanuts, dairy"
+                         aria-label="Add an allergy" autocomplete="off" />
+                  <button class="btn btn-secondary btn-sm" type="submit">Add</button>
+                </form>
+              </div>
+              <div class="mem-row">
+                <span class="mem-label">Dislikes</span>
+                <div id="mem-dislikes" class="chip-list"></div>
+                <form id="mem-dislike-form" class="mini-form" data-key="dislikes">
+                  <input class="mini-input field" type="text" maxlength="60" placeholder="e.g. mushroom"
+                         aria-label="Add a dislike" autocomplete="off" />
+                  <button class="btn btn-secondary btn-sm" type="submit">Add</button>
+                </form>
+              </div>
+              <div id="mem-other" class="mem-other"></div>
+              <p id="mem-error" class="inline-error small" role="alert" hidden></p>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================== CART (shopping list) =========================== -->
+      <section class="dest" id="dest-cart" aria-label="Cart" hidden>
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>Cart</h1>
+            <p class="dest-sub">Your shopping list. Chef adds what your recipes need — never an allergen.</p>
+          </div>
         </div>
 
-        <!-- Manual log: record a used/wasted item that wasn't a tracked perishable. -->
-        <div class="waste-logger">
-          <h3 class="section-title">Log an item</h3>
-          <p class="muted small">Ate something before it spoiled, or had to bin it? Record it here. Cost is optional — add it to track money.</p>
-          <form id="waste-form" class="waste-form">
-            <input id="waste-name" class="waste-input" type="text" placeholder="e.g. Spinach" maxlength="80" autocomplete="off" aria-label="Item name" required />
-            <input id="waste-cost" class="waste-input waste-cost" type="number" min="0" step="0.01" placeholder="Cost (optional)" autocomplete="off" aria-label="Estimated cost" />
-            <button id="waste-used" class="btn btn-primary" type="button" data-event="used">✅ Used</button>
-            <button id="waste-wasted" class="btn btn-secondary" type="button" data-event="wasted">🗑️ Wasted</button>
+        <section id="restock-card" class="chef-card glass card-pad cart-card restock-card" aria-labelledby="restock-title" hidden>
+          <div class="chef-card-head">
+            <h3 id="restock-title" class="chef-subtitle">
+              <svg class="ic restock-ic" aria-hidden="true"><use href="#ic-cart"/></svg>
+              Running low <span id="restock-count" class="count-pill" hidden></span>
+            </h3>
+            <button id="restock-addall" class="btn btn-secondary btn-sm" type="button" hidden>Add all to list</button>
+          </div>
+          <p id="restock-headline" class="muted small restock-headline"></p>
+          <p id="restock-added" class="ok-banner" role="status" hidden></p>
+          <div id="restock-list" class="restock-list"></div>
+        </section>
+
+        <section class="chef-card glass card-pad cart-card" aria-labelledby="shop-title">
+          <div class="chef-card-head">
+            <h3 id="shop-title" class="chef-subtitle">Shopping list <span id="shop-count" class="count-pill" hidden></span></h3>
+            <button id="shop-clear" class="btn-link" type="button" hidden>Clear bought</button>
+          </div>
+          <form id="shop-form" class="mini-form">
+            <input id="shop-input" class="mini-input field" type="text" maxlength="60" placeholder="Add an item, e.g. milk"
+                   aria-label="Add to shopping list" autocomplete="off" />
+            <button class="btn btn-primary btn-sm" type="submit">Add</button>
           </form>
-          <p id="waste-error" class="error-banner" role="alert" hidden></p>
-          <p id="waste-notice" class="nutri-notice" role="status" hidden></p>
-        </div>
+          <p id="shop-msg" class="muted small" role="status" hidden></p>
+          <ul id="shop-list" class="shop-list"></ul>
+          <p id="shop-empty" class="muted small">Your list is empty. Chef adds things here when a recipe needs them.</p>
+        </section>
+      </section>
 
-        <div id="analytics-loading" class="loading" role="status" aria-live="polite" hidden>
-          <span class="spinner" aria-hidden="true"></span>
-          <span>Loading analytics…</span>
-        </div>
-        <p id="analytics-error" class="error-banner" role="alert" hidden></p>
-
-        <div id="analytics-body" hidden>
-          <p id="analytics-headline" class="analytics-headline"></p>
-          <div id="analytics-metrics" class="plan-metrics"></div>
-          <p id="analytics-empty" class="muted" hidden>Nothing logged yet. Mark a tracked item used or wasted — or use “Log an item” above — to start seeing your trends.</p>
-
-          <div id="analytics-trend-section" class="analytics-section" hidden>
-            <h3 class="section-title">Weekly trend</h3>
-            <p class="muted small">Used vs wasted items per week, most recent on the right.</p>
-            <div id="analytics-trend" class="trend-chart"></div>
-          </div>
-
-          <div id="analytics-top-section" class="analytics-section" hidden>
-            <h3 class="section-title">Most wasted <span id="analytics-top-count" class="count-pill"></span></h3>
-            <div id="analytics-top" class="top-wasted-list"></div>
+      <!-- =========================== PLAN (meal plan + nutrition) =========================== -->
+      <section class="dest" id="dest-plan" aria-label="Plan" hidden>
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>Plan</h1>
+            <p class="dest-sub">A zero-waste plan, plus real nutrition for what's on hand.</p>
           </div>
         </div>
-      </div>
 
-      <!-- Chef panel: a tool-using agent (agent.py) that answers cooking questions by
-           calling the inventory / recommender / optimizer tools itself. Degrades to a
-           friendly "not configured" state when no chat model is set on the server. -->
-      <div id="panel-chef" class="tab-panel" role="tabpanel" aria-labelledby="tab-chef" hidden>
-        <div class="chef-head">
-          <p class="muted small">Ask the Chef what to cook. It reads your fridge, ranks recipes, and can plan meals for you — then explains its answer.</p>
+        <div class="segmented" role="tablist" aria-label="Plan view">
+          <button class="seg active" type="button" role="tab" aria-selected="true" data-sub="plan" data-dest-sub="plan">Meal plan</button>
+          <button class="seg" type="button" role="tab" aria-selected="false" data-sub="nutrition" data-dest-sub="plan">Nutrition</button>
         </div>
-        <div id="chef-log" class="chef-log" aria-live="polite">
-          <p id="chef-intro" class="muted small">Try: “What can I cook tonight?” · “Plan 2 days of dinners.” · “What should I use up first?”</p>
-        </div>
-        <p id="chef-error" class="error-banner" role="alert" hidden></p>
-        <form id="chef-form" class="chef-form">
-          <input id="chef-input" class="chef-input" type="text" maxlength="1000"
-                 placeholder="Ask the Chef…" autocomplete="off" aria-label="Message the Chef" />
-          <button id="chef-send" class="btn btn-primary" type="submit">Ask</button>
-        </form>
-      </div>
 
-      <!-- Upload panel -->
-      <div id="panel-upload" class="tab-panel" role="tabpanel" aria-labelledby="tab-upload" hidden>
-        <div id="dropzone" class="dropzone" tabindex="0" role="button"
-             aria-label="Drag and drop an image here, or click to choose a file">
-          <div class="dropzone-inner">
-            <span class="dropzone-icon">📷</span>
-            <p><strong>Drag &amp; drop</strong> an image here</p>
-            <p class="muted">or click to choose a file</p>
+        <!-- Meal plan -->
+        <div id="panel-plan" class="sub-panel">
+          <div class="plan-head glass card-pad">
+            <p class="muted small">A zero-waste plan that picks dishes to use up what's expiring first — solved as an optimization over your actual stock, not just a ranked list.</p>
+            <div class="plan-controls">
+              <label class="plan-field">Days
+                <select id="plan-days" class="plan-select field" aria-label="Days to plan">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                  <option value="6">6</option>
+                  <option value="7">7</option>
+                </select>
+              </label>
+              <label class="plan-field">Meals/day
+                <select id="plan-meals" class="plan-select field" aria-label="Meals per day">
+                  <option value="1">1</option>
+                  <option value="2" selected>2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                </select>
+              </label>
+              <label class="plan-field">Budget <span class="muted small" id="plan-budget-cur">(₹, optional)</span>
+                <input id="plan-budget" class="plan-select field" type="number" min="0" step="10"
+                       inputmode="numeric" placeholder="any" aria-label="Shopping budget cap" />
+              </label>
+              <button id="plan-build" class="btn btn-primary" type="button">Build plan</button>
+              <button id="plan-week" class="btn btn-secondary" type="button" title="Plan a full week: 7 days, 3 meals a day">
+                <span aria-hidden="true">✨</span> Autopilot week
+              </button>
+            </div>
           </div>
-          <input id="file-input" type="file" accept="image/*" hidden />
-        </div>
-      </div>
 
-      <!-- Webcam panel -->
-      <div id="panel-webcam" class="tab-panel" role="tabpanel" aria-labelledby="tab-webcam" hidden>
-        <div class="webcam-wrap">
-          <video id="video" playsinline autoplay muted></video>
-        </div>
-        <div class="webcam-controls">
-          <button id="start-camera" class="btn btn-secondary" type="button">Start camera</button>
-          <button id="capture" class="btn btn-secondary" type="button" disabled>Capture frame</button>
-        </div>
-        <p id="webcam-hint" class="muted small">Your browser will ask for camera permission. Nothing is recorded — a single frame is captured when you press Capture.</p>
-        <canvas id="canvas" hidden></canvas>
-      </div>
+          <div id="plan-loading" class="loading" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Optimizing your meal plan…</span>
+          </div>
+          <p id="plan-error" class="error-banner" role="alert" hidden></p>
 
-      <!-- History panel -->
-      <div id="panel-history" class="tab-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
-        <div class="history-head">
-          <p class="muted small">Every analysis is saved here with the time it was taken.</p>
-          <button id="refresh-history" class="btn btn-secondary" type="button">Refresh</button>
-        </div>
-        <div id="history-loading" class="loading" role="status" aria-live="polite" hidden>
-          <span class="spinner" aria-hidden="true"></span>
-          <span>Loading history…</span>
-        </div>
-        <p id="history-empty" class="muted" hidden>No scans yet. Analyze an image and it'll show up here.</p>
-        <p id="history-error" class="error-banner" role="alert" hidden></p>
-        <div id="history-list" class="history-list"></div>
-      </div>
-    </section>
+          <div id="plan-body" hidden>
+            <div id="plan-metrics" class="plan-metrics"></div>
+            <div id="plan-notes" class="plan-notes"></div>
+            <p id="plan-empty" class="muted" hidden>No cookable plan yet — scan your fridge (or add a few tracked items) and build again.</p>
 
-    <!-- Capture-flow output (preview, loading, error, results). Wrapped so tabs that
-         aren't Upload/Webcam can hide the whole flow at once while each part keeps its
-         own visibility. Hidden by default because the Fridge tab opens first. -->
-    <div id="capture-extras" class="contents" hidden>
+            <div id="plan-byday-section" class="plan-section" hidden>
+              <h3 class="section-title">Your week, day by day</h3>
+              <p class="muted small">Each day's meals and what they'd cost to top up.</p>
+              <div id="plan-byday" class="plan-byday"></div>
+            </div>
 
-    <!-- Preview + analyze -->
-    <section id="preview-section" class="panel" aria-label="Preview" hidden>
-      <h2 class="section-title">Preview</h2>
-      <div class="preview-row">
-        <img id="preview" class="preview-img" alt="Selected image preview" />
-        <div class="preview-actions">
-          <button id="analyze" class="btn btn-primary" type="button">Analyze image</button>
-          <button id="clear" class="btn btn-ghost" type="button">Clear</button>
+            <div id="plan-meals-list" class="plan-meals-list"></div>
+
+            <div id="plan-shopping-section" class="plan-section" hidden>
+              <h3 class="section-title">Shopping list <span id="plan-shopping-count" class="count-pill"></span></h3>
+              <div class="plan-shopping-head">
+                <p class="muted small">Buy these once — each is reused across every dish that needs it.</p>
+                <button id="plan-shopping-addall" class="btn btn-secondary btn-sm" type="button">Add all to my list</button>
+              </div>
+              <p id="plan-shopping-added" class="ok-banner" role="status" hidden></p>
+              <div id="plan-shopping" class="shopping-list"></div>
+            </div>
+
+            <div id="plan-atrisk-section" class="plan-section" hidden>
+              <h3 class="section-title">Still at risk</h3>
+              <p class="muted small">No dish in this plan uses these up — eat them fresh or freeze them.</p>
+              <div id="plan-atrisk" class="use-soon-list"></div>
+            </div>
+
+            <div id="plan-nutrition-section" class="plan-section" hidden>
+              <h3 class="section-title">Estimated nutrition</h3>
+              <div id="plan-nutrition" class="plan-nutrition"></div>
+              <p id="plan-nutrition-basis" class="muted small"></p>
+            </div>
+          </div>
         </div>
-      </div>
-    </section>
 
-    <!-- Loading -->
-    <div id="loading" class="loading" role="status" aria-live="polite" hidden>
-      <span class="spinner" aria-hidden="true"></span>
-      <span>Analyzing image…</span>
+        <!-- Nutrition -->
+        <div id="panel-nutrition" class="sub-panel" hidden>
+          <div class="nutri-head glass card-pad">
+            <p class="muted small">Real nutrition for what you have, from <strong>Open Food Facts</strong> — a free, open food database. Figures are per 100&nbsp;g and cached, so they also power the meal plan's nutrition estimate.</p>
+            <button id="nutri-refresh" class="btn btn-primary" type="button">Refresh from Open Food Facts</button>
+          </div>
+
+          <!-- Barcode scanner -->
+          <div class="barcode-box glass card-pad">
+            <h3 class="section-title">Scan a packaged product</h3>
+            <p class="muted small">Point your camera at a barcode, or type the number. We look it up on Open Food Facts and cache its nutrition.</p>
+            <form id="barcode-form" class="barcode-form">
+              <input id="barcode-input" class="barcode-input field" type="text" inputmode="numeric"
+                     pattern="[0-9]*" maxlength="14" placeholder="e.g. 3017620422003"
+                     autocomplete="off" aria-label="Barcode number" />
+              <button id="barcode-lookup" class="btn btn-secondary" type="submit">Look up</button>
+              <button id="barcode-scan" class="btn btn-secondary" type="button" hidden>Scan</button>
+              <button id="barcode-stop" class="btn btn-ghost" type="button" hidden>Stop</button>
+            </form>
+            <div id="barcode-camera" class="barcode-camera" hidden>
+              <video id="barcode-video" playsinline autoplay muted></video>
+              <p class="muted small">Hold the barcode steady in view…</p>
+            </div>
+            <p id="barcode-error" class="error-banner" role="alert" hidden></p>
+            <div id="barcode-result" class="barcode-result" hidden></div>
+          </div>
+
+          <div id="nutri-loading" class="loading" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Loading nutrition…</span>
+          </div>
+          <p id="nutri-error" class="error-banner" role="alert" hidden></p>
+
+          <div id="nutri-body" hidden>
+            <div id="nutri-metrics" class="plan-metrics"></div>
+            <p id="nutri-empty" class="muted" hidden>Scan your fridge (or add a few tracked items), then refresh to pull nutrition for what's on hand.</p>
+            <div id="nutri-table-section" class="nutri-section" hidden>
+              <h3 class="section-title">Per ingredient <span id="nutri-count" class="count-pill"></span></h3>
+              <p class="muted small">Per 100&nbsp;g. “Refresh from Open Food Facts” fills in anything still missing.</p>
+              <div id="nutri-table" class="nutri-table"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =========================== INSIGHTS (analytics + history) =========================== -->
+      <section class="dest" id="dest-insights" aria-label="Insights" hidden>
+        <div class="dest-head">
+          <div class="dest-title">
+            <h1>Insights</h1>
+            <p class="dest-sub">How much you use versus waste — and every scan you've taken.</p>
+          </div>
+        </div>
+
+        <div class="segmented" role="tablist" aria-label="Insights view">
+          <button class="seg active" type="button" role="tab" aria-selected="true" data-sub="analytics" data-dest-sub="insights">Analytics</button>
+          <button class="seg" type="button" role="tab" aria-selected="false" data-sub="history" data-dest-sub="insights">History</button>
+        </div>
+
+        <!-- Analytics -->
+        <div id="panel-analytics" class="sub-panel">
+          <div class="analytics-head glass card-pad">
+            <p class="muted small">See how much food you actually use versus throw away. Mark tracked items <strong>Used</strong> or <strong>Wasted</strong> on the Recipes tab — or log one below — and it all rolls up here.</p>
+            <button id="analytics-refresh" class="btn btn-ghost" type="button">Refresh</button>
+          </div>
+
+          <div class="waste-logger glass card-pad">
+            <h3 class="section-title">Log an item</h3>
+            <p class="muted small">Ate something before it spoiled, or had to bin it? Record it here. Cost is optional — add it to track money.</p>
+            <form id="waste-form" class="waste-form">
+              <input id="waste-name" class="waste-input field" type="text" placeholder="e.g. Spinach" maxlength="80" autocomplete="off" aria-label="Item name" required />
+              <input id="waste-cost" class="waste-input field waste-cost" type="number" min="0" step="0.01" placeholder="Cost (optional)" autocomplete="off" aria-label="Estimated cost" />
+              <button id="waste-used" class="btn btn-primary" type="button" data-event="used">Used</button>
+              <button id="waste-wasted" class="btn btn-secondary" type="button" data-event="wasted">Wasted</button>
+            </form>
+            <p id="waste-error" class="error-banner" role="alert" hidden></p>
+            <p id="waste-notice" class="nutri-notice" role="status" hidden></p>
+          </div>
+
+          <div id="analytics-loading" class="loading" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Loading analytics…</span>
+          </div>
+          <p id="analytics-error" class="error-banner" role="alert" hidden></p>
+
+          <div id="analytics-body" hidden>
+            <p id="analytics-headline" class="analytics-headline"></p>
+            <div id="analytics-metrics" class="plan-metrics"></div>
+            <p id="analytics-empty" class="muted" hidden>Nothing logged yet. Mark a tracked item used or wasted — or use “Log an item” above — to start seeing your trends.</p>
+
+            <div id="analytics-trend-section" class="analytics-section" hidden>
+              <h3 class="section-title">Weekly trend</h3>
+              <p class="muted small">Used vs wasted items per week, most recent on the right.</p>
+              <div id="analytics-trend" class="trend-chart"></div>
+            </div>
+
+            <div id="analytics-top-section" class="analytics-section" hidden>
+              <h3 class="section-title">Most wasted <span id="analytics-top-count" class="count-pill"></span></h3>
+              <div id="analytics-top" class="top-wasted-list"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- History -->
+        <div id="panel-history" class="sub-panel" hidden>
+          <div class="history-head glass card-pad">
+            <p class="muted small">Every analysis is saved here with the time it was taken.</p>
+            <button id="refresh-history" class="btn btn-ghost" type="button">Refresh</button>
+          </div>
+          <div id="history-loading" class="loading" role="status" aria-live="polite" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span>Loading history…</span>
+          </div>
+          <p id="history-empty" class="muted" hidden>No scans yet. Analyze an image and it'll show up here.</p>
+          <p id="history-error" class="error-banner" role="alert" hidden></p>
+          <div id="history-list" class="history-list"></div>
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <p class="muted small">Frost · the SmartFridge Vision app — live inventory, scan history, and recipe suggestions.</p>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ===== Phone: glass bottom tab bar ===== -->
+  <nav class="tabbar" id="tabbar" aria-label="Sections">
+    <button class="tabbar-item" type="button" data-dest="fridge">
+      <svg class="ic" aria-hidden="true"><use href="#ic-fridge"/></svg><span>Fridge</span>
+    </button>
+    <button class="tabbar-item" type="button" data-dest="recipes">
+      <svg class="ic" aria-hidden="true"><use href="#ic-recipes"/></svg><span>Recipes</span>
+    </button>
+    <button class="tabbar-item tabbar-scan" type="button" data-dest="scan" aria-label="Scan">
+      <span class="scan-orb"><svg class="ic" aria-hidden="true"><use href="#ic-scan"/></svg></span>
+      <span class="scan-word">Scan</span>
+    </button>
+    <button class="tabbar-item" type="button" data-dest="chef">
+      <svg class="ic" aria-hidden="true"><use href="#ic-chef"/></svg><span>Chef</span>
+    </button>
+    <button class="tabbar-item" type="button" data-dest="cart">
+      <svg class="ic" aria-hidden="true"><use href="#ic-cart"/></svg><span>Cart</span>
+      <span id="tabbar-cart-count" class="nav-badge" hidden></span>
+    </button>
+  </nav>
+
+  <!-- ===== Phone: "More" sheet (all destinations) ===== -->
+  <div id="sheet-overlay" class="sheet-overlay" hidden></div>
+  <div id="more-sheet" class="more-sheet" role="dialog" aria-modal="true" aria-label="All sections" hidden>
+    <div class="sheet-grip" aria-hidden="true"></div>
+    <div class="sheet-grid">
+      <button class="sheet-item" type="button" data-dest="fridge"><svg class="ic" aria-hidden="true"><use href="#ic-fridge"/></svg><span>My Fridge</span></button>
+      <button class="sheet-item" type="button" data-dest="recipes"><svg class="ic" aria-hidden="true"><use href="#ic-recipes"/></svg><span>Recipes</span></button>
+      <button class="sheet-item" type="button" data-dest="scan"><svg class="ic" aria-hidden="true"><use href="#ic-scan"/></svg><span>Scan</span></button>
+      <button class="sheet-item" type="button" data-dest="chef"><svg class="ic" aria-hidden="true"><use href="#ic-chef"/></svg><span>Chef</span></button>
+      <button class="sheet-item" type="button" data-dest="cart"><svg class="ic" aria-hidden="true"><use href="#ic-cart"/></svg><span>Cart</span></button>
+      <button class="sheet-item" type="button" data-dest="plan"><svg class="ic" aria-hidden="true"><use href="#ic-plan"/></svg><span>Plan</span></button>
+      <button class="sheet-item" type="button" data-dest="insights"><svg class="ic" aria-hidden="true"><use href="#ic-insights"/></svg><span>Insights</span></button>
     </div>
+  </div>
 
-    <!-- Error -->
-    <div id="error" class="error-banner" role="alert" hidden></div>
+  <!-- ===== Cook Mode overlay (guided steps + timers + voice + swap ideas) ===== -->
+  <div id="cook-overlay" class="cook-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="cook-title" hidden>
+    <div class="cook-sheet glass">
+      <header class="cook-head">
+        <div class="cook-head-main">
+          <h2 id="cook-title" class="cook-title">Cook Mode</h2>
+          <div class="cook-meta">
+            <span id="cook-method" class="cook-badge"></span>
+            <span id="cook-time" class="muted small"></span>
+            <span id="cook-have" class="muted small"></span>
+          </div>
+        </div>
+        <div class="cook-head-actions">
+          <button id="cook-voice" class="btn btn-ghost cook-voice" type="button"
+                  aria-pressed="false" title="Read steps aloud">🔊 Voice off</button>
+          <button id="cook-close" class="cook-close" type="button" aria-label="Close cook mode">✕</button>
+        </div>
+      </header>
 
-    <!-- Results -->
-    <section id="results-section" class="results" aria-label="Inventory results" hidden>
-      <h2 class="section-title">Inventory <span id="item-count" class="count-pill"></span></h2>
-      <div id="cards" class="cards"></div>
-      <p id="no-items" class="muted" hidden>No food items were detected in this image.</p>
+      <div class="cook-body">
+        <!-- Ingredients checklist + swap ideas -->
+        <section class="cook-ingredients" aria-label="Ingredients">
+          <h3 class="cook-subhead">Ingredients</h3>
+          <div id="cook-ingredient-list" class="cook-ingredient-list"></div>
+          <p id="cook-note" class="muted small cook-note"></p>
+        </section>
 
-      <div id="unidentified-section" hidden>
-        <h2 class="section-title">Needs your input</h2>
-        <p class="muted small">These items couldn't be identified from the photo. Later phases will let you resolve them — for now they're shown for reference.</p>
-        <div id="unidentified-cards" class="cards"></div>
+        <!-- Guided steps -->
+        <section class="cook-steps" aria-label="Steps">
+          <div class="cook-progress">
+            <div id="cook-dots" class="cook-dots" aria-hidden="true"></div>
+            <span id="cook-step-count" class="muted small"></span>
+          </div>
+
+          <article class="cook-step-card glass">
+            <div class="cook-step-top">
+              <span id="cook-step-n" class="cook-step-n">1</span>
+              <h3 id="cook-step-title" class="cook-step-title">Step</h3>
+            </div>
+            <p id="cook-step-text" class="cook-step-text"></p>
+            <div id="cook-step-uses" class="cook-step-uses"></div>
+
+            <!-- Per-step timer -->
+            <div id="cook-timer" class="cook-timer" hidden>
+              <div id="cook-timer-display" class="cook-timer-display">00:00</div>
+              <div class="cook-timer-btns">
+                <button id="cook-timer-toggle" class="btn btn-primary" type="button">Start timer</button>
+                <button id="cook-timer-reset" class="btn btn-ghost" type="button">Reset</button>
+              </div>
+            </div>
+          </article>
+
+          <div class="cook-nav">
+            <button id="cook-prev" class="btn btn-ghost" type="button">← Back</button>
+            <button id="cook-next" class="btn btn-primary" type="button">Next →</button>
+            <button id="cook-done" class="btn btn-success cook-done" type="button" hidden>✓ I cooked this</button>
+          </div>
+          <p id="cook-status" class="cook-status small" role="status" aria-live="polite" hidden></p>
+
+          <!-- Shown after "I cooked this": offer to track any leftovers so they don't get forgotten. -->
+          <div id="cook-leftovers" class="cook-leftovers" hidden>
+            <p class="cook-leftovers-lead">Made extra? Track the leftovers so nothing gets forgotten.</p>
+            <form id="cook-leftovers-form" class="cook-leftovers-form">
+              <input id="cook-leftovers-name" class="field cook-leftovers-name" type="text" maxlength="80"
+                     placeholder="Leftover name" aria-label="Leftover name" autocomplete="off" />
+              <label class="cook-leftovers-days">Use within
+                <select id="cook-leftovers-days" class="field" aria-label="Days until leftovers should be used">
+                  <option value="1">1 day</option>
+                  <option value="2">2 days</option>
+                  <option value="3" selected>3 days</option>
+                  <option value="4">4 days</option>
+                  <option value="5">5 days</option>
+                  <option value="7">1 week</option>
+                </select>
+              </label>
+              <button id="cook-leftovers-save" class="btn btn-secondary" type="submit">Save leftovers</button>
+            </form>
+            <p id="cook-leftovers-msg" class="muted small" role="status" hidden></p>
+          </div>
+        </section>
       </div>
-    </section>
-
-    </div><!-- /#capture-extras -->
-  </main>
-
-  <footer class="site-footer">
-    <p class="muted small">SmartFridge Vision · Live inventory, scan history, and recipe suggestions.</p>
-  </footer>
+    </div>
+  </div>
 
   <!-- Socket.IO client for real-time updates. Loaded from CDN; the app degrades to
        manual refresh (its previous behaviour) if this can't load — see initRealtime(). -->

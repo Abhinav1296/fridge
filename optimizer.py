@@ -35,9 +35,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any
 
+import budget
 import recommender
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,9 @@ def plan_meals(
     nutrition: Mapping[str, Mapping[str, Any]] | Callable[[str], Mapping[str, Any] | None] | None = None,
     use_soon_days: int = recommender.DEFAULT_USE_SOON_DAYS,
     solver: str = "auto",
+    recipe_filter: Callable[[Mapping[str, Any]], bool] | None = None,
+    cost_of: Callable[[str], float] | None = None,
+    max_budget: float | None = None,
 ) -> dict[str, Any]:
     """Build a zero-waste meal plan for the current fridge state.
 
@@ -106,6 +110,15 @@ def plan_meals(
         solver: ``"auto"`` (ILP if PuLP is available, else heuristic), ``"ilp"`` (force the
             exact solver; falls back to heuristic if PuLP is missing), or ``"greedy"``
             (force the heuristic — used to exercise the fallback in tests).
+        recipe_filter: Optional predicate over a raw recipe dict; rejected recipes are never
+            scheduled. Used to honour remembered diet/allergy rules (see :mod:`preferences`).
+        cost_of: Optional ``token -> estimated price`` callable (e.g. :func:`budget.price_of`).
+            When given, the plan is priced: each meal, the shopping list, and the metrics gain
+            estimated costs, and — with ``max_budget`` — the shop is constrained to fit.
+        max_budget: Optional ceiling on the plan's estimated *shopping* spend (the distinct
+            new ingredients it must buy; on-hand and pantry items are free). Ignored unless
+            ``cost_of`` is also provided. The solver will schedule fewer/cheaper new dishes
+            rather than exceed it.
 
     Returns:
         A JSON-serializable dict::
@@ -121,33 +134,38 @@ def plan_meals(
               "notes": [ "human-readable summary lines" ],
             }
     """
-    today = (now or datetime.now(UTC)).date()
+    today = recommender.local_today(now)
     slots = _slot_count(days, meals_per_day)
 
     capacity, urgent, use_soon = _fridge_state(
         inventory_items or [], perishables or [], today, use_soon_days
     )
-    candidates = _build_candidates(capacity, urgent)
+    candidates = _build_candidates(capacity, urgent, recipe_filter)
+
+    # Per-token prices for everything the plan might buy (empty when pricing isn't requested).
+    prices = _price_table(candidates, cost_of)
+    budget_cap = float(max_budget) if (cost_of is not None and max_budget is not None) else None
 
     chosen: list[int]
     engine: str
     want_ilp = solver in ("auto", "ilp") and _HAS_PULP and bool(candidates)
     if want_ilp:
         try:
-            chosen = _solve_ilp(candidates, capacity, urgent, slots)
+            chosen = _solve_ilp(candidates, capacity, urgent, slots, prices, budget_cap)
             engine = "ilp"
         except Exception:  # pragma: no cover - solver runtime failure is environment-specific
             logger.exception("ILP solve failed; falling back to greedy heuristic")
-            chosen = _solve_greedy(candidates, capacity, urgent, slots)
+            chosen = _solve_greedy(candidates, capacity, urgent, slots, prices, budget_cap)
             engine = "greedy"
     else:
         if solver == "ilp" and not _HAS_PULP:
             logger.info("PuLP not installed; using greedy heuristic for the meal plan")
-        chosen = _solve_greedy(candidates, capacity, urgent, slots)
+        chosen = _solve_greedy(candidates, capacity, urgent, slots, prices, budget_cap)
         engine = "greedy"
 
     result = _assemble(
-        chosen, candidates, capacity, urgent, use_soon, slots, today, engine, nutrition
+        chosen, candidates, capacity, urgent, use_soon, slots, today, engine, nutrition,
+        prices, budget_cap, cost_of is not None,
     )
     result["horizon"] = {
         "days": max(1, int(days or 1)),
@@ -207,17 +225,22 @@ def _fridge_state(
 
 
 def _build_candidates(
-    capacity: Mapping[str, int], urgent: set[str]
+    capacity: Mapping[str, int],
+    urgent: set[str],
+    recipe_filter: Callable[[Mapping[str, Any]], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Precompute the schedulable recipes and their per-plan attributes.
 
     A recipe is a candidate when it has at least one on-hand ingredient and is either
     reasonably complete or uses something at-risk, and doesn't demand a huge shop. Pantry
     staples are treated as always available (never "matched" capacity, never "to buy").
+    Recipes rejected by ``recipe_filter`` (household diet/allergy rules) are skipped.
     """
     have = set(capacity)
     candidates: list[dict[str, Any]] = []
     for recipe in recommender._load_recipes():
+        if recipe_filter is not None and not recipe_filter(recipe):
+            continue
         req = {t.lower() for t in recipe.get("ingredients", [])}
         effective = req - recommender.PANTRY
         if not effective:
@@ -251,6 +274,30 @@ def _build_candidates(
         reverse=True,
     )
     return candidates[:_MAX_CANDIDATES]
+
+
+def _price_table(
+    candidates: Sequence[Mapping[str, Any]],
+    cost_of: Callable[[str], float] | None,
+) -> dict[str, float]:
+    """Price every ingredient the plan could buy or use, or ``{}`` when pricing is off.
+
+    Built once and shared by the solvers (budget constraint), the shopping list, and the
+    metrics so a token's price is looked up exactly once and every layer agrees on it.
+    """
+    if cost_of is None:
+        return {}
+    tokens: set[str] = set()
+    for cand in candidates:
+        tokens.update(cand["missing"])
+        tokens.update(cand["match"])
+    prices: dict[str, float] = {}
+    for token in tokens:
+        try:
+            prices[token] = float(cost_of(token))
+        except Exception:  # noqa: BLE001 — a bad price must never break planning
+            prices[token] = 0.0
+    return prices
 
 
 # --- Shared objective (used by both engines and for reporting) --------------
@@ -304,6 +351,8 @@ def _solve_ilp(
     capacity: Mapping[str, int],
     urgent: set[str],
     slots: int,
+    prices: Mapping[str, float] | None = None,
+    max_budget: float | None = None,
 ) -> list[int]:
     """Solve the meal plan exactly as an integer linear program; return chosen indices.
 
@@ -315,8 +364,11 @@ def _solve_ilp(
 
     Constraints: fill at most ``slots``; link z to x; never consume more of an ingredient
     than is on hand (the scarce-resource rule); u[i] only if some scheduled dish uses i;
-    b[j] whenever a scheduled dish is missing j. Objective = the shared :data:`W_*` blend.
+    b[j] whenever a scheduled dish is missing j; and — when ``max_budget`` is given — the
+    total estimated cost of the distinct bought ingredients stays within it. Objective = the
+    shared :data:`W_*` blend.
     """
+    prices = prices or {}
     prob = pulp.LpProblem("zero_waste_meal_plan", pulp.LpMaximize)
 
     n = len(candidates)
@@ -371,6 +423,11 @@ def _solve_ilp(
         for j in candidates[r]["missing"]:
             prob += b[j] >= z[r]
 
+    # Budget ceiling: the estimated cost of everything the plan buys must fit the cap. Each
+    # ingredient is bought once (b[j] is binary), so the same new okra serves every okra dish.
+    if max_budget is not None:
+        prob += pulp.lpSum(b[j] * float(prices.get(j, 0.0)) for j in buyables) <= max_budget
+
     solver_cmd = pulp.PULP_CBC_CMD(msg=0, timeLimit=_SOLVER_TIME_LIMIT)
     prob.solve(solver_cmd)
 
@@ -390,6 +447,8 @@ def _solve_greedy(
     capacity: Mapping[str, int],
     urgent: set[str],
     slots: int,
+    prices: Mapping[str, float] | None = None,
+    max_budget: float | None = None,
 ) -> list[int]:
     """Approximate the plan with a greedy fill, then improve it with local search.
 
@@ -397,12 +456,27 @@ def _solve_greedy(
     until the slots are full or nothing helps. Local search: try replacing each scheduled
     dish with any other candidate and keep the swap if it raises the shared objective. This
     optimizes exactly the objective in :func:`_evaluate`, so its plans track the ILP's.
+
+    When ``max_budget`` is given, a dish is only feasible if adding it keeps the plan's total
+    estimated shopping cost (the distinct ingredients bought across all chosen dishes) within
+    the cap — the same budget the ILP enforces, so both engines respect the ceiling.
     """
+    prices = prices or {}
+
+    def _shop_cost(indices: Sequence[int]) -> float:
+        """Estimated cost of the distinct new ingredients a set of dishes must buy."""
+        bought = {t for r in indices for t in candidates[r]["missing"]}
+        return sum(float(prices.get(t, 0.0)) for t in bought)
+
     chosen: list[int] = []
     remaining = dict(capacity)  # units left after the dishes chosen so far
 
     def _feasible(r: int) -> bool:
-        return all(remaining.get(t, 0) >= 1 for t in candidates[r]["match"])
+        if any(remaining.get(t, 0) < 1 for t in candidates[r]["match"]):
+            return False
+        if max_budget is not None and _shop_cost([*chosen, r]) > max_budget:
+            return False
+        return True
 
     def _consume(r: int) -> None:
         for t in candidates[r]["match"]:
@@ -437,10 +511,13 @@ def _solve_greedy(
             current = _evaluate(chosen, candidates, urgent)["objective"]
             best_alt, best_obj = chosen[pos], current
             for r in range(len(candidates)):
-                if all(avail.get(t, 0) >= 1 for t in candidates[r]["match"]):
-                    obj = _evaluate([*trial_base, r], candidates, urgent)["objective"]
-                    if obj > best_obj:
-                        best_alt, best_obj = r, obj
+                if any(avail.get(t, 0) < 1 for t in candidates[r]["match"]):
+                    continue
+                if max_budget is not None and _shop_cost([*trial_base, r]) > max_budget:
+                    continue
+                obj = _evaluate([*trial_base, r], candidates, urgent)["objective"]
+                if obj > best_obj:
+                    best_alt, best_obj = r, obj
             if best_alt != chosen[pos]:
                 chosen[pos] = best_alt
                 improved = True
@@ -462,10 +539,22 @@ def _assemble(
     today: date,
     engine: str,
     nutrition: Mapping[str, Mapping[str, Any]] | Callable[[str], Mapping[str, Any] | None] | None,
+    prices: Mapping[str, float] | None = None,
+    budget_cap: float | None = None,
+    priced: bool = False,
 ) -> dict[str, Any]:
-    """Turn the chosen indices into the public plan payload with metrics and notes."""
+    """Turn the chosen indices into the public plan payload with metrics and notes.
+
+    When ``priced`` (i.e. the caller supplied a ``cost_of`` hook), every meal, the shopping
+    list, and the metrics gain estimated costs in the household currency, and — if a
+    ``budget_cap`` was set — the metrics report the budget and whether the plan fits it.
+    """
+    prices = prices or {}
     metrics = _evaluate(chosen, candidates, urgent)
     used_urgent: set[str] = metrics["used_urgent"]
+
+    def _sum_price(tokens: Sequence[str]) -> float:
+        return round(sum(float(prices.get(t, 0.0)) for t in tokens), 2)
 
     # Order the schedule so the most waste-saving, quickest dishes come first.
     order = sorted(
@@ -479,20 +568,24 @@ def _assemble(
     plan: list[dict[str, Any]] = []
     for slot_no, k in enumerate(order, start=1):
         cand = candidates[chosen[k]]
-        plan.append(
-            {
-                "slot": slot_no,
-                "id": cand["id"],
-                "title": cand["title"],
-                "time_min": cand["time_min"],
-                "tags": cand["tags"],
-                "uses": [recommender._prettify(t) for t in cand["match"]],
-                "uses_expiring": [recommender._prettify(t) for t in cand["expiring"]],
-                "to_buy": [recommender._prettify(t) for t in cand["missing"]],
-            }
-        )
+        meal: dict[str, Any] = {
+            "slot": slot_no,
+            "id": cand["id"],
+            "title": cand["title"],
+            "time_min": cand["time_min"],
+            "tags": cand["tags"],
+            "uses": [recommender._prettify(t) for t in cand["match"]],
+            "uses_expiring": [recommender._prettify(t) for t in cand["expiring"]],
+            "to_buy": [recommender._prettify(t) for t in cand["missing"]],
+        }
+        if priced:
+            # ``est_cost`` is what this dish adds to the shop (its missing items); ``pantry_value``
+            # is the worth of what it uses from the fridge — the money the plan saves by cooking it.
+            meal["est_cost"] = _sum_price(cand["missing"])
+            meal["pantry_value"] = _sum_price(cand["match"])
+        plan.append(meal)
 
-    shopping_list = _shopping_list(chosen, candidates)
+    shopping_list = _shopping_list(chosen, candidates, prices if priced else None)
     at_risk_remaining = [
         row for row in use_soon
         if row["severity"] == "soon" and row["token"] not in used_urgent
@@ -512,6 +605,17 @@ def _assemble(
         "new_ingredients_to_buy": len(metrics["bought"]),
         "objective": metrics["objective"],
     }
+    if priced:
+        # The shop's cost counts each distinct new ingredient once (buy okra once for every okra
+        # dish); pantry value is the total worth of on-hand stock the plan actually consumes.
+        shopping_cost = _sum_price(sorted(metrics["bought"]))
+        pantry_value = _sum_price(sorted({t for k in chosen for t in candidates[k]["match"]}))
+        result_metrics["currency"] = budget.CURRENCY
+        result_metrics["shopping_cost"] = shopping_cost
+        result_metrics["pantry_value_used"] = pantry_value
+        if budget_cap is not None:
+            result_metrics["budget"] = round(float(budget_cap), 2)
+            result_metrics["within_budget"] = shopping_cost <= budget_cap + 1e-6
     nutrition_summary = _nutrition_summary(chosen, candidates, nutrition)
     if nutrition_summary:
         result_metrics["nutrition"] = nutrition_summary
@@ -529,9 +633,15 @@ def _assemble(
 
 
 def _shopping_list(
-    chosen: Sequence[int], candidates: Sequence[Mapping[str, Any]]
+    chosen: Sequence[int],
+    candidates: Sequence[Mapping[str, Any]],
+    prices: Mapping[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Aggregate everything the plan needs bought, biggest shared ingredient first."""
+    """Aggregate everything the plan needs bought, biggest shared ingredient first.
+
+    When ``prices`` is given, each row carries the ingredient's estimated ``est_cost`` so the
+    UI can show a priced list without re-looking-up anything.
+    """
     by_item: dict[str, list[str]] = {}
     for r in chosen:
         for token in candidates[r]["missing"]:
@@ -539,10 +649,17 @@ def _shopping_list(
             if candidates[r]["title"] not in by_item[token]:
                 by_item[token].append(candidates[r]["title"])
     ranked = sorted(by_item.items(), key=lambda kv: (len(kv[1]), kv[0]), reverse=True)
-    return [
-        {"item": recommender._prettify(token), "for_recipes": titles, "count": len(titles)}
-        for token, titles in ranked
-    ]
+    rows: list[dict[str, Any]] = []
+    for token, titles in ranked:
+        row: dict[str, Any] = {
+            "item": recommender._prettify(token),
+            "for_recipes": titles,
+            "count": len(titles),
+        }
+        if prices is not None:
+            row["est_cost"] = round(float(prices.get(token, 0.0)), 2)
+        rows.append(row)
+    return rows
 
 
 def _nutrition_summary(
@@ -605,9 +722,26 @@ def _notes(
             f"item(s) ({metrics['waste_avoided_pct']}% of what's about to spoil)."
         )
     if metrics["new_ingredients_to_buy"]:
-        notes.append(f"Needs {metrics['new_ingredients_to_buy']} ingredient(s) bought.")
+        buy_note = f"Needs {metrics['new_ingredients_to_buy']} ingredient(s) bought"
+        if "shopping_cost" in metrics:
+            buy_note += f" (~{metrics['currency']}{metrics['shopping_cost']:g} to shop)"
+        notes.append(buy_note + ".")
     else:
         notes.append("Everything in this plan is already in your kitchen.")
+    if metrics.get("budget") is not None:
+        cur, cost, cap = metrics["currency"], metrics["shopping_cost"], metrics["budget"]
+        if metrics.get("within_budget"):
+            notes.append(f"Within your {cur}{cap:g} budget ({cur}{cost:g} spent).")
+        else:
+            notes.append(
+                f"Over the {cur}{cap:g} budget by {cur}{cost - cap:g} — "
+                "raise the budget or free up more from the fridge."
+            )
+    if metrics.get("pantry_value_used"):
+        notes.append(
+            f"Uses ~{metrics['currency']}{metrics['pantry_value_used']:g} of food you "
+            "already have."
+        )
     if at_risk_remaining:
         names = ", ".join(row["name"] for row in at_risk_remaining[:3])
         notes.append(f"Still at risk (no recipe fit): {names}.")

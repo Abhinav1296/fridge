@@ -26,6 +26,7 @@ the UI convert to local time for display.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -39,9 +40,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "smartfridge.db"
 
-# A scan's ``source`` records how the image arrived.
+# A scan's ``source`` records how the inventory snapshot arrived: a photo upload, a live
+# webcam capture, or items folded in from a shopping receipt (see ``kitchen.import_receipt``).
 SOURCE_UPLOAD = "upload"
 SOURCE_WEBCAM = "webcam"
+SOURCE_RECEIPT = "receipt"
 
 # Schema as discrete statements — libsql-client executes one statement per call (there is
 # no ``executescript``), so the DDL is kept as a list rather than one semicolon-joined blob.
@@ -132,12 +135,69 @@ _SCHEMA_STATEMENTS = [
         created_at  TEXT    NOT NULL                -- UTC ISO-8601 when the consumption happened
     )
     """,
+    # --- Agent state (the agentic Chef: memory, actions, proactive briefings) ---
+    # Long-term memory: what the Chef has learned about the household (diet, allergies,
+    # dislikes, household size, ...). One row per key; ``value`` is JSON so list-valued
+    # preferences (allergies, dislikes) round-trip without a join table.
+    """
+    CREATE TABLE IF NOT EXISTS agent_memory (
+        key         TEXT    PRIMARY KEY,            -- e.g. 'diet', 'allergies', 'dislikes'
+        value       TEXT    NOT NULL,               -- JSON-encoded value
+        updated_at  TEXT    NOT NULL                -- UTC ISO-8601 when last written
+    )
+    """,
+    # The household shopping list the Chef (and the user) add to. ``done`` ticks an item off
+    # without deleting it, so the list keeps a short "bought" history until cleared.
+    """
+    CREATE TABLE IF NOT EXISTS shopping_list (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        item        TEXT    NOT NULL,               -- canonical ingredient token (lowercased)
+        name        TEXT    NOT NULL,               -- display name
+        qty         TEXT,                           -- optional free-text quantity ('500 g')
+        reason      TEXT,                           -- optional why, e.g. 'for Palak Paneer'
+        done        INTEGER NOT NULL DEFAULT 0,     -- 1 once bought / ticked off
+        created_at  TEXT    NOT NULL                -- UTC ISO-8601 when added
+    )
+    """,
+    # Human-in-the-loop action queue. When the agent wants to *change* the fridge (mark a
+    # meal cooked, track an expiry, log waste) it doesn't act directly — it files a pending
+    # action here, and only a user confirmation executes it. ``arguments``/``result`` are
+    # JSON. ``source`` says who proposed it ('chat' or the proactive 'briefing' watcher).
+    """
+    CREATE TABLE IF NOT EXISTS agent_actions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        tool         TEXT    NOT NULL,              -- executor name, e.g. 'cook_meal'
+        arguments    TEXT    NOT NULL,              -- JSON arguments for the executor
+        summary      TEXT    NOT NULL,              -- one-line, human-readable description
+        status       TEXT    NOT NULL,              -- pending|done|cancelled|failed|expired
+        source       TEXT    NOT NULL DEFAULT 'chat',
+        result       TEXT,                          -- JSON outcome once resolved
+        created_at   TEXT    NOT NULL,
+        resolved_at  TEXT
+    )
+    """,
+    # Proactive briefings written by the watcher (see :mod:`watcher`): a short headline plus
+    # structured body. ``facts_hash`` fingerprints the underlying facts so an unchanged
+    # fridge never produces a duplicate briefing.
+    """
+    CREATE TABLE IF NOT EXISTS agent_briefings (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        trigger     TEXT    NOT NULL,               -- 'scan' | 'timer' | 'manual'
+        headline    TEXT    NOT NULL,
+        body        TEXT    NOT NULL,               -- JSON: at_risk, suggestion, action ids...
+        facts_hash  TEXT    NOT NULL,
+        dismissed   INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT    NOT NULL
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_items_scan        ON items(scan_id)",
     "CREATE INDEX IF NOT EXISTS idx_unidentified_scan ON unidentified(scan_id)",
     "CREATE INDEX IF NOT EXISTS idx_scans_created_at  ON scans(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_perishables_use_by ON perishables(use_by)",
     "CREATE INDEX IF NOT EXISTS idx_waste_log_logged_at ON waste_log(logged_at)",
     "CREATE INDEX IF NOT EXISTS idx_consumption_created_at ON consumption(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_actions_status ON agent_actions(status)",
+    "CREATE INDEX IF NOT EXISTS idx_shopping_list_done ON shopping_list(done)",
 ]
 
 
@@ -751,6 +811,381 @@ def _consumed_totals() -> dict[str, int]:
             continue
         totals[token] = totals.get(token, 0) + max(1, _as_int(row.get("qty"), 1))
     return totals
+
+
+# --- Agent memory (long-term household preferences) -------------------------
+
+
+def get_memory() -> dict[str, Any]:
+    """Return every remembered key as ``{key: decoded_value}`` (empty when nothing stored).
+
+    Values are JSON-decoded; a row that somehow holds invalid JSON is returned as its raw
+    string rather than failing the whole read.
+    """
+    with _connect() as client:
+        rows = _rows_to_dicts(
+            client.execute("SELECT key, value FROM agent_memory ORDER BY key")
+        )
+    memory: dict[str, Any] = {}
+    for row in rows:
+        memory[row["key"]] = _json_or_raw(row.get("value"))
+    return memory
+
+
+def set_memory(key: str, value: Any, updated_at: datetime | None = None) -> None:
+    """Insert or overwrite one remembered key (the value is stored as JSON)."""
+    name = str(key).strip().lower()
+    if not name:
+        return
+    when = (updated_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        client.execute(
+            "INSERT INTO agent_memory (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            [name, json.dumps(value), when],
+        )
+    logger.info("Agent memory updated: %s", name)
+
+
+def delete_memory(key: str) -> bool:
+    """Forget one remembered key; return ``True`` if a row was removed."""
+    with _connect() as client:
+        result = client.execute(
+            "DELETE FROM agent_memory WHERE key = ?", [str(key).strip().lower()]
+        )
+        return int(result.rows_affected or 0) > 0
+
+
+def clear_memory() -> int:
+    """Forget everything; return how many keys were removed."""
+    with _connect() as client:
+        result = client.execute("DELETE FROM agent_memory")
+        return int(result.rows_affected or 0)
+
+
+# --- Shopping list ----------------------------------------------------------
+
+
+_SHOPPING_COLUMNS = "id, item, name, qty, reason, done, created_at"
+
+
+def add_shopping_items(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    created_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Add items to the shopping list, skipping ones already on it (not yet bought).
+
+    Args:
+        entries: ``{"name": str, "token": str?, "qty": str?, "reason": str?}`` mappings. The
+            canonical ``token`` defaults to the stripped, lowercased name; it is what
+            de-duplicates the list, so "Tomatoes" and "tomato" (same token) don't repeat.
+        created_at: Override timestamp (UTC). Defaults to now.
+
+    Returns:
+        The rows that were actually inserted (as dicts), in input order.
+    """
+    when = (created_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        open_tokens = {
+            row["item"]
+            for row in _rows_to_dicts(
+                client.execute("SELECT item FROM shopping_list WHERE done = 0")
+            )
+        }
+        added: list[dict[str, Any]] = []
+        for entry in entries or []:
+            display = str(entry.get("name", "")).strip()
+            if not display:
+                continue
+            token = str(entry.get("token") or display).strip().lower()
+            if token in open_tokens:
+                continue
+            open_tokens.add(token)
+            qty = _as_opt_str(entry.get("qty"))
+            reason = _as_opt_str(entry.get("reason"))
+            result = client.execute(
+                "INSERT INTO shopping_list (item, name, qty, reason, done, created_at) "
+                "VALUES (?, ?, ?, ?, 0, ?)",
+                [token, display, qty, reason, when],
+            )
+            added.append({
+                "id": int(result.last_insert_rowid), "item": token, "name": display,
+                "qty": qty, "reason": reason, "done": 0, "created_at": when,
+            })
+    if added:
+        logger.info("Added %d shopping item(s)", len(added))
+    return added
+
+
+def list_shopping(*, include_done: bool = True) -> list[dict[str, Any]]:
+    """Return the shopping list: open items first (oldest first), then ticked-off ones."""
+    where = "" if include_done else "WHERE done = 0 "
+    with _connect() as client:
+        return _rows_to_dicts(
+            client.execute(
+                f"SELECT {_SHOPPING_COLUMNS} FROM shopping_list {where}"
+                "ORDER BY done ASC, id ASC"
+            )
+        )
+
+
+def set_shopping_done(item_id: int, done: bool) -> bool:
+    """Tick an item off (or back on); return ``True`` if the item exists."""
+    with _connect() as client:
+        result = client.execute(
+            "UPDATE shopping_list SET done = ? WHERE id = ?", [1 if done else 0, int(item_id)]
+        )
+        return int(result.rows_affected or 0) > 0
+
+
+def delete_shopping_item(item_id: int) -> bool:
+    """Remove one item from the list; return ``True`` if a row was removed."""
+    with _connect() as client:
+        result = client.execute("DELETE FROM shopping_list WHERE id = ?", [int(item_id)])
+        return int(result.rows_affected or 0) > 0
+
+
+def clear_shopping(*, done_only: bool = False) -> int:
+    """Clear the list (or just the ticked-off items); return how many rows were removed."""
+    with _connect() as client:
+        result = client.execute(
+            "DELETE FROM shopping_list" + (" WHERE done = 1" if done_only else "")
+        )
+        return int(result.rows_affected or 0)
+
+
+# --- Agent action queue (human-in-the-loop) ---------------------------------
+
+
+_ACTION_COLUMNS = (
+    "id, tool, arguments, summary, status, source, result, created_at, resolved_at"
+)
+
+ACTION_PENDING = "pending"
+ACTION_RUNNING = "running"
+ACTION_DONE = "done"
+ACTION_CANCELLED = "cancelled"
+ACTION_FAILED = "failed"
+ACTION_EXPIRED = "expired"
+
+
+def create_action(
+    tool: str,
+    arguments: Mapping[str, Any],
+    summary: str,
+    *,
+    source: str = "chat",
+    created_at: datetime | None = None,
+) -> dict[str, Any]:
+    """File a pending action awaiting the user's confirmation; return it as a dict."""
+    when = (created_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        result = client.execute(
+            "INSERT INTO agent_actions (tool, arguments, summary, status, source, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [str(tool), json.dumps(dict(arguments)), str(summary)[:300], ACTION_PENDING,
+             str(source), when],
+        )
+        action_id = int(result.last_insert_rowid)
+    logger.info("Agent proposed action %d (%s, source=%s)", action_id, tool, source)
+    return {
+        "id": action_id, "tool": str(tool), "arguments": dict(arguments),
+        "summary": str(summary)[:300], "status": ACTION_PENDING, "source": str(source),
+        "result": None, "created_at": when, "resolved_at": None,
+    }
+
+
+def get_action(action_id: int) -> dict[str, Any] | None:
+    """Return one action (JSON fields decoded), or ``None`` if it doesn't exist."""
+    with _connect() as client:
+        rows = _rows_to_dicts(
+            client.execute(
+                f"SELECT {_ACTION_COLUMNS} FROM agent_actions WHERE id = ?", [int(action_id)]
+            )
+        )
+    return _decode_action(rows[0]) if rows else None
+
+
+def list_actions(*, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Return actions newest first, optionally only those with one ``status``."""
+    with _connect() as client:
+        if status:
+            rows = _rows_to_dicts(
+                client.execute(
+                    f"SELECT {_ACTION_COLUMNS} FROM agent_actions WHERE status = ? "
+                    "ORDER BY id DESC LIMIT ?",
+                    [str(status), max(1, int(limit))],
+                )
+            )
+        else:
+            rows = _rows_to_dicts(
+                client.execute(
+                    f"SELECT {_ACTION_COLUMNS} FROM agent_actions ORDER BY id DESC LIMIT ?",
+                    [max(1, int(limit))],
+                )
+            )
+    return [_decode_action(row) for row in rows]
+
+
+def resolve_action(
+    action_id: int,
+    status: str,
+    result: Any = None,
+    *,
+    resolved_at: datetime | None = None,
+) -> bool:
+    """Move a *pending* action to a final status; return ``False`` if it wasn't pending.
+
+    The ``status = 'pending'`` guard makes confirmation idempotent: a double-click (or two
+    tabs confirming at once) executes the action only once — the second resolve finds no
+    pending row and is refused.
+    """
+    when = (resolved_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        outcome = client.execute(
+            "UPDATE agent_actions SET status = ?, result = ?, resolved_at = ? "
+            "WHERE id = ? AND status = ?",
+            [str(status), json.dumps(result, default=str), when, int(action_id), ACTION_PENDING],
+        )
+        return int(outcome.rows_affected or 0) > 0
+
+
+def claim_action(action_id: int) -> dict[str, Any] | None:
+    """Atomically take a pending action for execution; return it, or ``None`` if not pending.
+
+    Flips ``pending`` → ``running`` in one conditional UPDATE, so exactly one caller wins
+    even when two confirmations race. The winner then calls :func:`finish_action`.
+    """
+    with _connect() as client:
+        outcome = client.execute(
+            "UPDATE agent_actions SET status = ? WHERE id = ? AND status = ?",
+            [ACTION_RUNNING, int(action_id), ACTION_PENDING],
+        )
+        if int(outcome.rows_affected or 0) == 0:
+            return None
+        rows = _rows_to_dicts(
+            client.execute(
+                f"SELECT {_ACTION_COLUMNS} FROM agent_actions WHERE id = ?", [int(action_id)]
+            )
+        )
+    return _decode_action(rows[0]) if rows else None
+
+
+def finish_action(
+    action_id: int, status: str, result: Any = None, *, resolved_at: datetime | None = None
+) -> None:
+    """Record the final status/result of an action taken with :func:`claim_action`."""
+    when = (resolved_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        client.execute(
+            "UPDATE agent_actions SET status = ?, result = ?, resolved_at = ? WHERE id = ?",
+            [str(status), json.dumps(result, default=str), when, int(action_id)],
+        )
+
+
+def expire_actions(*, source: str) -> int:
+    """Expire every still-pending action from one ``source``; return how many changed.
+
+    The watcher calls this before filing a fresh briefing so yesterday's suggestions don't
+    linger as live buttons once the facts behind them have changed.
+    """
+    when = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        result = client.execute(
+            "UPDATE agent_actions SET status = ?, resolved_at = ? "
+            "WHERE status = ? AND source = ?",
+            [ACTION_EXPIRED, when, ACTION_PENDING, str(source)],
+        )
+        return int(result.rows_affected or 0)
+
+
+def clear_actions() -> int:
+    """Delete the whole action queue (tests / reset); return how many rows were removed."""
+    with _connect() as client:
+        result = client.execute("DELETE FROM agent_actions")
+        return int(result.rows_affected or 0)
+
+
+def _decode_action(row: Mapping[str, Any]) -> dict[str, Any]:
+    action = dict(row)
+    action["arguments"] = _json_or_raw(action.get("arguments")) or {}
+    action["result"] = _json_or_raw(action.get("result"))
+    return action
+
+
+# --- Proactive briefings ----------------------------------------------------
+
+
+_BRIEFING_COLUMNS = "id, trigger, headline, body, facts_hash, dismissed, created_at"
+
+
+def save_briefing(
+    trigger: str,
+    headline: str,
+    body: Mapping[str, Any],
+    facts_hash: str,
+    *,
+    created_at: datetime | None = None,
+) -> dict[str, Any]:
+    """Store a new briefing and return it (``body`` decoded)."""
+    when = (created_at or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with _connect() as client:
+        result = client.execute(
+            "INSERT INTO agent_briefings (trigger, headline, body, facts_hash, dismissed, "
+            "created_at) VALUES (?, ?, ?, ?, 0, ?)",
+            [str(trigger), str(headline)[:500], json.dumps(dict(body), default=str),
+             str(facts_hash), when],
+        )
+        briefing_id = int(result.last_insert_rowid)
+    logger.info("Saved agent briefing %d (trigger=%s)", briefing_id, trigger)
+    return {
+        "id": briefing_id, "trigger": str(trigger), "headline": str(headline)[:500],
+        "body": dict(body), "facts_hash": str(facts_hash), "dismissed": 0, "created_at": when,
+    }
+
+
+def latest_briefing(*, include_dismissed: bool = False) -> dict[str, Any] | None:
+    """Return the newest briefing (by default only if it hasn't been dismissed)."""
+    with _connect() as client:
+        rows = _rows_to_dicts(
+            client.execute(
+                f"SELECT {_BRIEFING_COLUMNS} FROM agent_briefings ORDER BY id DESC LIMIT 1"
+            )
+        )
+    if not rows:
+        return None
+    briefing = dict(rows[0])
+    if briefing.get("dismissed") and not include_dismissed:
+        return None
+    briefing["body"] = _json_or_raw(briefing.get("body")) or {}
+    return briefing
+
+
+def dismiss_briefing(briefing_id: int) -> bool:
+    """Hide one briefing; return ``True`` if it exists."""
+    with _connect() as client:
+        result = client.execute(
+            "UPDATE agent_briefings SET dismissed = 1 WHERE id = ?", [int(briefing_id)]
+        )
+        return int(result.rows_affected or 0) > 0
+
+
+def clear_briefings() -> int:
+    """Delete every briefing (tests / reset); return how many rows were removed."""
+    with _connect() as client:
+        result = client.execute("DELETE FROM agent_briefings")
+        return int(result.rows_affected or 0)
+
+
+def _json_or_raw(value: Any) -> Any:
+    """Decode a JSON text column, returning the raw value if it isn't valid JSON."""
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
 
 
 def _hydrate_scan(

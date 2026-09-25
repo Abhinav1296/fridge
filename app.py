@@ -12,8 +12,17 @@ A thin HTTP wrapper around :mod:`vision_service` and :mod:`storage`:
   :mod:`recommender` from the current inventory plus tracked "use by" dates.
 * ``POST /api/plan`` returns a zero-waste meal plan from :mod:`optimizer` (which dishes to
   cook so the least food is wasted and the least must be bought).
-* ``POST /api/agent`` answers a natural-language question with the tool-using Chef agent
-  (:mod:`agent`), which calls the inventory / recommender / optimizer functions itself.
+* ``POST /api/agent`` answers a natural-language message with the Chef agent (:mod:`agent`):
+  it looks things up with tools, remembers household preferences, keeps the shopping list,
+  and *proposes* fridge changes that wait for the user's Confirm. Without an LLM (or when
+  the provider is down) a rules-based fallback (:mod:`offline_agent`) answers instead.
+  Progress streams live over Socket.IO (``agent_step``).
+* ``/api/agent/actions`` lists proposed changes; ``.../<id>/confirm`` runs one through
+  :mod:`kitchen`, ``.../<id>/cancel`` drops it.
+* ``/api/agent/memory`` (GET/POST/DELETE) shows and edits what Chef remembers;
+  ``/api/shopping`` (GET/POST/PATCH/DELETE) is the shared shopping list.
+* ``/api/agent/briefing`` returns / regenerates the proactive briefing from :mod:`watcher`
+  (also refreshed after every scan, every confirmed change, and on a timer).
 * ``GET  /api/nutrition`` returns the nutrition dashboard for the current fridge (cached
   per-ingredient calories/macros plus per-100 g totals and coverage).
 * ``POST /api/nutrition/refresh`` fills the nutrition cache for the current inventory from
@@ -39,7 +48,8 @@ import io
 import logging
 import os
 import re
-from datetime import datetime
+import threading
+from datetime import UTC, datetime, timedelta
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
@@ -48,12 +58,20 @@ from PIL import Image, UnidentifiedImageError
 
 import agent
 import analytics
+import budget
+import cookmode
+import kitchen
 import nutrition
+import offline_agent
 import optimizer
+import preferences
+import receipts
 import recommender
+import restock
 import storage
 import vectorstore
 import vision_service
+import watcher
 from agent import AgentAPIError, AgentConfigError
 from nutrition import NutritionError
 from vision_service import (
@@ -115,6 +133,55 @@ def _on_connect() -> None:
     """Log new real-time subscribers. No server state is pushed on connect — the page
     loads its own initial data over HTTP; sockets carry only subsequent change hints."""
     logger.info("Realtime client connected")
+    _ensure_watch_timer()
+
+
+# --- Proactive watcher ------------------------------------------------------
+
+_watch_started = False
+_watch_guard = threading.Lock()
+
+
+def _auto_briefings() -> bool:
+    """Scan/action-triggered briefings are on unless ``AGENT_AUTO_BRIEFING=0``."""
+    return os.getenv("AGENT_AUTO_BRIEFING", "1").strip() != "0"
+
+
+def _refresh_briefing(trigger: str) -> None:
+    """Let the watcher re-check the fridge off the request thread (never delays a response)."""
+    if _auto_briefings():
+        socketio.start_background_task(_briefing_task, trigger)
+
+
+def _briefing_task(trigger: str) -> None:
+    try:
+        watcher.generate_briefing(trigger)
+    except Exception:  # noqa: BLE001 — a background check must never crash the server
+        logger.exception("Watcher failed (trigger=%s)", trigger)
+        return
+    # Also covers "nothing new" / "stale briefing dismissed": the client just re-reads.
+    _emit_state("briefing", "agent", source=f"watcher-{trigger}")
+
+
+def _ensure_watch_timer() -> None:
+    """Start the periodic watcher once per process (lazily, on the first live client)."""
+    global _watch_started
+    minutes = watcher.watch_minutes()
+    if minutes <= 0 or not _auto_briefings():
+        return
+    with _watch_guard:
+        if _watch_started:
+            return
+        _watch_started = True
+    socketio.start_background_task(_watch_loop, minutes)
+
+
+def _watch_loop(minutes: int) -> None:
+    logger.info("Watcher timer started (every %d min)", minutes)
+    socketio.sleep(3)  # first look right after the first client connects (cheap: deduped)
+    while True:
+        _briefing_task("timer")
+        socketio.sleep(minutes * 60)
 
 
 # Ensure the history database exists before serving. A DB problem must not take the
@@ -205,8 +272,10 @@ def analyze():
     except Exception:  # noqa: BLE001 — history is best-effort, analysis is what matters
         logger.exception("Failed to record scan to history (analysis still returned)")
     else:
-        # A new scan replaces the fridge snapshot — nudge open tabs to refresh inventory.
+        # A new scan replaces the fridge snapshot — nudge open tabs to refresh inventory,
+        # and let the watcher look for anything about to go off.
         _emit_state("inventory", source="scan")
+        _refresh_briefing("scan")
 
     return jsonify(result)
 
@@ -243,19 +312,23 @@ def api_recommendations():
     """Return recipe / use-soon / shopping suggestions for the current fridge.
 
     Combines the latest scan (what's visibly in the fridge) with the user's tracked
-    "use by" dates, and runs the embedding-based recommender over both. Returns empty
+    "use by" dates, and runs the embedding-based recommender over both. The household
+    rules Chef remembers (diet, allergies, dislikes) filter the recipes. Returns empty
     lists (not an error) when there's nothing to suggest yet.
     """
     try:
         scan = _current_inventory()
         perishables = storage.list_perishables()
+        # Read with the rest: if the rules can't be loaded we must not suggest (say) an
+        # allergen, so this fails the request rather than silently dropping the filter.
+        rules = preferences.build_filter(storage.get_memory())
     except Exception:  # noqa: BLE001 — a read failure shouldn't 500 the whole page
         logger.exception("Failed to load data for recommendations")
         return jsonify({"error": "Couldn't load suggestions right now."}), 500
 
     items = (scan or {}).get("items", [])
     try:
-        result = recommender.recommend(items, perishables)
+        result = recommender.recommend(items, perishables, recipe_filter=rules)
     except Exception:  # noqa: BLE001 — recommender must never take the page down
         logger.exception("Recommender failed")
         return jsonify({"error": "Couldn't build suggestions right now."}), 500
@@ -264,21 +337,32 @@ def api_recommendations():
 
 @app.post("/api/plan")
 def api_plan():
-    """Return a zero-waste meal plan for the current fridge.
+    """Return a zero-waste, budget-aware meal plan for the current fridge.
 
-    Body (all optional): ``{"days": int (1-7), "meals_per_day": int (1-4)}``. Combines the
-    latest scan, tracked "use by" dates, and the cached nutrition table, then runs
+    Body (all optional):
+        ``days``          int 1-7   — horizon length (default 3).
+        ``meals_per_day`` int 1-4   — slots per day (default 2).
+        ``budget``        number    — a ceiling on the plan's estimated *shopping* spend, in
+                                      the household currency. Omit (or send ``null``) for no cap.
+
+    Combines the latest scan, tracked "use by" dates, and the cached nutrition table, then runs
     :func:`optimizer.plan_meals` (exact ILP when PuLP is available, else the built-in
-    heuristic). Returns an empty plan (not an error) when there's nothing to cook yet.
+    heuristic). The plan is always **priced** — every meal, the shopping list, and the metrics
+    carry estimated costs (see :mod:`budget`) — and grouped into per-day buckets under
+    ``by_day`` so the Autopilot view can show one card per day. When ``budget`` is given the
+    shop is constrained to fit and ``metrics.within_budget`` reports whether it did. Returns an
+    empty plan (not an error) when there's nothing to cook yet.
     """
     payload = request.get_json(silent=True) or {}
     days = _clamp_int(payload.get("days"), default=3, lo=1, hi=7)
     meals_per_day = _clamp_int(payload.get("meals_per_day"), default=2, lo=1, hi=4)
+    max_budget = _clamp_budget(payload.get("budget"))
 
     try:
         scan = _current_inventory()
         perishables = storage.list_perishables()
         nutrition = {row["item"]: row for row in storage.list_nutrition() if row.get("item")}
+        rules = preferences.build_filter(storage.get_memory())
     except Exception:  # noqa: BLE001 — a read failure shouldn't 500 the whole page
         logger.exception("Failed to load data for the meal plan")
         return jsonify({"error": "Couldn't load your fridge for planning right now."}), 500
@@ -291,7 +375,11 @@ def api_plan():
             days=days,
             meals_per_day=meals_per_day,
             nutrition=nutrition or None,
+            recipe_filter=rules,
+            cost_of=budget.price_of,
+            max_budget=max_budget,
         )
+        plan["by_day"] = budget.group_by_day(plan["plan"], meals_per_day)
     except Exception:  # noqa: BLE001 — the planner must never take the page down
         logger.exception("Meal-plan optimizer failed")
         return jsonify({"error": "Couldn't build a meal plan right now."}), 500
@@ -358,6 +446,41 @@ def api_recipe_similar(recipe_id: str):
     if not results and recipe_id not in searcher.index:
         return jsonify({"error": "Unknown recipe."}), 404
     return jsonify({"id": recipe_id, "results": results, "count": len(results)})
+
+
+@app.get("/api/cook/<recipe_id>")
+def api_cook_session(recipe_id: str):
+    """Return a Cook Mode session for one recipe: synthesised steps + ingredient swap ideas.
+
+    Each ingredient is marked have/missing against the current fridge (scan + tracked
+    perishables), and swap ideas never include anything the household avoids (diet, allergy
+    or dislike). Read-only — cooking the dish is a separate, confirm-gated agent action.
+    404 if the recipe id is unknown.
+    """
+    try:
+        recipe = next(
+            (r for r in recommender.all_recipes() if r.get("id") == recipe_id), None
+        )
+        if recipe is None:
+            return jsonify({"error": "Unknown recipe."}), 404
+        scan = _current_inventory()
+        perishables = storage.list_perishables()
+        memory = storage.get_memory()
+    except Exception:  # noqa: BLE001 — a read failure shouldn't 500 the whole page
+        logger.exception("Failed to load data for cook mode")
+        return jsonify({"error": "Couldn't open cook mode right now."}), 500
+
+    items = (scan or {}).get("items", [])
+    have = nutrition.tokens_from_inventory(items, perishables)
+    exclude = set(preferences.excluded_tokens(memory))
+    try:
+        session = cookmode.build_cook_session(
+            recipe, have_tokens=have, exclude_tokens=exclude
+        )
+    except Exception:  # noqa: BLE001 — cook mode must never take the page down
+        logger.exception("Cook Mode session build failed for %s", recipe_id)
+        return jsonify({"error": "Couldn't build the cooking guide right now."}), 500
+    return jsonify(session)
 
 
 @app.get("/api/nutrition")
@@ -513,13 +636,49 @@ def api_barcode():
     )
 
 
+# --- Chef agent ---------------------------------------------------------------
+
+_RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+ACTION_MAX_AGE = timedelta(hours=24)   # an unconfirmed proposal older than this is stale
+
+
+def _agent_tools(*, source: str = "chat") -> dict[str, agent.Tool]:
+    """Chef's full toolset, wired to the real storage / recommender / search / kitchen."""
+    return agent.build_default_tools(
+        get_latest_scan=_current_inventory,
+        list_perishables=storage.list_perishables,
+        list_nutrition=storage.list_nutrition,
+        get_memory=storage.get_memory,
+        set_memory=storage.set_memory,
+        delete_memory=storage.delete_memory,
+        search_recipes=lambda query, k: _get_recipe_searcher().search(query, k=k),
+        waste_summary=lambda: analytics.summarize(storage.list_waste_events()),
+        list_shopping=storage.list_shopping,
+        add_shopping=kitchen.add_shopping,
+        propose=lambda tool, args, summary: storage.create_action(
+            tool, args, summary, source=source
+        ),
+    )
+
+
 @app.post("/api/agent")
 def api_agent():
-    """Answer a natural-language question with the tool-using Chef agent.
+    """Talk to Chef, the kitchen agent.
 
-    Body: ``{"message": str, "history": [{"role": "user"|"assistant", "content": str}]?}``.
-    The agent calls the inventory / recommender / optimizer tools itself and returns
-    ``{"answer", "steps", "mode", "model"}``. Returns 503 when no chat model is configured.
+    Body: ``{"message": str, "history": [{"role", "content"}]?, "run_id": str?, "sid": str?}``.
+
+    Chef works in a loop — look things up with tools, decide, act — and returns
+    ``{"answer", "steps", "mode", "model", "actions", "changed"}``:
+
+    * it may **save** household preferences and **add** to the shopping list directly
+      (reversible, shown in the UI);
+    * anything that changes the fridge is only **proposed** (``actions``) and waits for the
+      user's Confirm (``POST /api/agent/actions/<id>/confirm``).
+
+    With ``run_id`` + ``sid`` (the caller's Socket.IO id), each step streams to that tab as
+    an ``agent_step`` event while Chef works. Without an LLM configured — or if the
+    provider is down — a rules-based fallback answers (``mode: "offline"``) instead of an
+    error, using the same tools and the same confirm-before-change rule.
     """
     payload = request.get_json(silent=True) or {}
     message = str(payload.get("message", "")).strip()
@@ -530,35 +689,297 @@ def api_agent():
         return jsonify({"error": "That message is a bit long — please shorten it."}), 400
     if not isinstance(history, list):
         history = None
+    run_id = str(payload.get("run_id") or "")
+    sid = str(payload.get("sid") or "")
+    stream = bool(_RUN_ID.fullmatch(run_id) and _RUN_ID.fullmatch(sid))
 
-    if not agent.configured():
-        return (
-            jsonify(
-                {
-                    "error": "The Chef isn't configured on the server. Add LLM_API_KEY "
-                    "(or VISION_API_KEY) to your .env to enable it."
-                }
-            ),
-            503,
-        )
+    def on_step(event) -> None:
+        if stream:  # to the asking tab only; other tabs get the state_changed hints below
+            socketio.emit("agent_step", {"run_id": run_id, **dict(event)}, to=sid)
 
-    tools = agent.build_default_tools(
-        get_latest_scan=_current_inventory,
-        list_perishables=storage.list_perishables,
-        list_nutrition=storage.list_nutrition,
-    )
     try:
-        result = agent.run_agent(message, tools=tools, history=history)
-    except AgentConfigError as exc:
-        logger.error("Agent misconfigured: %s", exc)
-        return jsonify({"error": "The Chef isn't configured on the server."}), 503
-    except AgentAPIError as exc:
-        logger.warning("Agent API error: %s", exc)
-        return jsonify({"error": "The Chef couldn't reach its language model. Try again."}), 502
+        tools = _agent_tools()
+        memory = storage.get_memory()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to prepare the agent")
+        return jsonify({"error": "Something went wrong while asking the Chef."}), 500
+
+    try:
+        if agent.configured():
+            try:
+                result = agent.run_agent(
+                    message, tools=tools, history=history, memory=memory, on_step=on_step
+                )
+            except (AgentConfigError, AgentAPIError) as exc:
+                logger.warning("Agent LLM unavailable, answering offline: %s", exc)
+                result = offline_agent.run_offline(
+                    message, tools=tools, on_step=on_step,
+                    note="My AI brain is unreachable right now, so this is a simpler answer.",
+                )
+        else:
+            result = offline_agent.run_offline(message, tools=tools, on_step=on_step)
     except Exception:  # noqa: BLE001 — never leak a stack trace to the client
         logger.exception("Unexpected error in the agent")
         return jsonify({"error": "Something went wrong while asking the Chef."}), 500
+
+    scopes = list(result.get("changed") or [])
+    if result.get("actions"):
+        scopes.append("agent")
+    if scopes:
+        _emit_state(*scopes, source="agent")
     return jsonify(result)
+
+
+@app.get("/api/agent/actions")
+def api_agent_actions():
+    """List Chef's proposed changes: ``?status=pending`` (default) or ``all`` (recent 30)."""
+    status = (request.args.get("status") or "pending").strip().lower()
+    try:
+        if status == "all":
+            actions = storage.list_actions(limit=30)
+        else:
+            actions = storage.list_actions(status=storage.ACTION_PENDING, limit=30)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to list agent actions")
+        return jsonify({"error": "Couldn't load Chef's suggestions right now."}), 500
+    return jsonify({"actions": actions})
+
+
+@app.post("/api/agent/actions/<int:action_id>/confirm")
+def api_agent_confirm(action_id: int):
+    """Carry out one proposed change — the only way an agent suggestion touches the fridge.
+
+    The stored tool + arguments run through :func:`kitchen.execute` (a fixed whitelist —
+    the same code as the manual buttons). Claiming is atomic, so a double-click or two tabs
+    confirming at once run it exactly once (the loser gets 409).
+    """
+    try:
+        action = storage.get_action(action_id)
+        if action is None:
+            return jsonify({"error": "That request was not found."}), 404
+        if action.get("status") != storage.ACTION_PENDING:
+            return jsonify({"error": "That request was already handled.", "action": action}), 409
+        if _is_stale(action):
+            storage.resolve_action(action_id, storage.ACTION_EXPIRED)
+            _emit_state("agent", source="agent-action")
+            return jsonify({"error": "That request is out of date — ask Chef again."}), 409
+        claimed = storage.claim_action(action_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to load agent action %s", action_id)
+        return jsonify({"error": "Couldn't carry that out right now."}), 500
+    if claimed is None:
+        return jsonify({"error": "That request was already handled."}), 409
+
+    try:
+        result = kitchen.execute(claimed["tool"], claimed.get("arguments") or {})
+    except kitchen.KitchenError as exc:
+        storage.finish_action(action_id, storage.ACTION_FAILED, {"error": exc.message})
+        _emit_state("agent", source="agent-action")
+        return jsonify({"error": exc.message}), exc.status_code
+    except Exception:  # noqa: BLE001
+        logger.exception("Agent action %s failed", action_id)
+        storage.finish_action(action_id, storage.ACTION_FAILED, {"error": "internal error"})
+        _emit_state("agent", source="agent-action")
+        return jsonify({"error": "Couldn't carry that out right now."}), 500
+
+    scopes = list(result.pop("scopes", []))
+    storage.finish_action(action_id, storage.ACTION_DONE, result)
+    _emit_state(*scopes, "agent", source="agent-action")
+    if {"inventory", "perishables"} & set(scopes):
+        _refresh_briefing("action")
+    return jsonify({"action": storage.get_action(action_id), "result": result})
+
+
+@app.post("/api/agent/actions/<int:action_id>/cancel")
+def api_agent_cancel(action_id: int):
+    """Drop a proposed change without doing it."""
+    try:
+        if storage.get_action(action_id) is None:
+            return jsonify({"error": "That request was not found."}), 404
+        if not storage.resolve_action(action_id, storage.ACTION_CANCELLED):
+            return jsonify({"error": "That request was already handled."}), 409
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to cancel agent action %s", action_id)
+        return jsonify({"error": "Couldn't cancel that right now."}), 500
+    _emit_state("agent", source="agent-action")
+    return jsonify({"cancelled": True, "id": action_id})
+
+
+def _is_stale(action) -> bool:
+    try:
+        created = datetime.strptime(str(action.get("created_at")), "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return datetime.now(UTC) - created.replace(tzinfo=UTC) > ACTION_MAX_AGE
+
+
+@app.get("/api/agent/memory")
+def api_agent_memory():
+    """What Chef remembers about the household (diet, allergies, dislikes, ...)."""
+    try:
+        memory = storage.get_memory()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to read agent memory")
+        return jsonify({"error": "Couldn't load your preferences right now."}), 500
+    return jsonify({
+        "memory": memory,
+        "summary": preferences.summarize(memory),
+        "keys": list(preferences.KEYS),
+        "diets": list(preferences.DIETS),
+    })
+
+
+@app.post("/api/agent/memory")
+def api_agent_remember():
+    """Save one preference. Body: ``{"key": str, "value": str}`` (list keys append)."""
+    payload = request.get_json(silent=True) or {}
+    return _memory_tool("remember_preference", payload)
+
+
+@app.delete("/api/agent/memory")
+def api_agent_forget():
+    """Forget ``?key=`` (optionally just one ``&value=`` of a list), or everything if no key."""
+    key = (request.args.get("key") or "").strip()
+    if not key:
+        try:
+            cleared = storage.clear_memory()
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to clear agent memory")
+            return jsonify({"error": "Couldn't update your preferences right now."}), 500
+        _emit_state("memory", source="memory")
+        return jsonify({"cleared": cleared})
+    return _memory_tool("forget_preference", {"key": key, "value": request.args.get("value")})
+
+
+def _memory_tool(name: str, args):
+    """Run Chef's own memory tool, so the form and the chat share one validation path."""
+    try:
+        result = _agent_tools()[name].run(dict(args))
+    except Exception:  # noqa: BLE001
+        logger.exception("Memory update failed")
+        return jsonify({"error": "Couldn't update your preferences right now."}), 500
+    if result.get("error"):
+        return jsonify({"error": result["error"]}), 400
+    _emit_state("memory", source="memory")
+    return jsonify({**result, "memory": storage.get_memory()})
+
+
+@app.get("/api/shopping")
+def api_shopping():
+    """The shopping list: open items first, then ticked-off ones."""
+    try:
+        items = storage.list_shopping()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to read the shopping list")
+        return jsonify({"error": "Couldn't load your shopping list right now."}), 500
+    return jsonify({"items": items})
+
+
+@app.post("/api/shopping")
+def api_shopping_add():
+    """Add items. Body: ``{"items": [{"name", "qty"?, "reason"?} | str]}`` or ``{"name"}``.
+
+    Same rules as when Chef adds them: duplicates skipped, household allergens refused.
+    """
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items")
+    if items is None and payload.get("name"):
+        items = [{"name": payload.get("name"), "qty": payload.get("qty")}]
+    try:
+        result = _agent_tools()["add_to_shopping_list"].run({"items": items})
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to add to the shopping list")
+        return jsonify({"error": "Couldn't update your shopping list right now."}), 500
+    if result.get("error"):
+        return jsonify({"error": result["error"]}), 400
+    _emit_state("shopping", source="shopping")
+    return jsonify(result), 201
+
+
+@app.patch("/api/shopping/<int:item_id>")
+def api_shopping_toggle(item_id: int):
+    """Tick an item off (or back on). Body: ``{"done": bool}``."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        found = storage.set_shopping_done(item_id, bool(payload.get("done", True)))
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to update shopping item %s", item_id)
+        return jsonify({"error": "Couldn't update your shopping list right now."}), 500
+    if not found:
+        return jsonify({"error": "That item was not found."}), 404
+    _emit_state("shopping", source="shopping")
+    return jsonify({"updated": True, "id": item_id})
+
+
+@app.delete("/api/shopping/<int:item_id>")
+def api_shopping_delete(item_id: int):
+    """Remove one item from the list."""
+    try:
+        removed = storage.delete_shopping_item(item_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to delete shopping item %s", item_id)
+        return jsonify({"error": "Couldn't update your shopping list right now."}), 500
+    if not removed:
+        return jsonify({"error": "That item was not found."}), 404
+    _emit_state("shopping", source="shopping")
+    return jsonify({"deleted": True})
+
+
+@app.delete("/api/shopping")
+def api_shopping_clear():
+    """Clear the list — or only the ticked-off items with ``?done=1``."""
+    done_only = (request.args.get("done") or "").strip() in ("1", "true")
+    try:
+        cleared = storage.clear_shopping(done_only=done_only)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to clear the shopping list")
+        return jsonify({"error": "Couldn't update your shopping list right now."}), 500
+    if cleared:
+        _emit_state("shopping", source="shopping")
+    return jsonify({"cleared": cleared})
+
+
+@app.get("/api/agent/briefing")
+def api_agent_briefing():
+    """The current proactive briefing (``null`` if none / dismissed) with its live actions."""
+    try:
+        briefing = storage.latest_briefing()
+        if briefing:
+            pending = {a["id"]: a for a in storage.list_actions(
+                status=storage.ACTION_PENDING, limit=30) if a.get("source") == watcher.SOURCE}
+            briefing["actions"] = [pending[a["id"]] for a in
+                                   (briefing.get("body") or {}).get("actions", [])
+                                   if a.get("id") in pending]
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to read the briefing")
+        return jsonify({"error": "Couldn't load Chef's briefing right now."}), 500
+    return jsonify({"briefing": briefing})
+
+
+@app.post("/api/agent/briefing")
+def api_agent_briefing_check():
+    """*Check now*: have the watcher look at the fridge right away (always answers)."""
+    try:
+        watcher.generate_briefing("manual", force=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("Manual briefing failed")
+        return jsonify({"error": "Chef couldn't check the fridge right now."}), 500
+    _emit_state("briefing", "agent", source="watcher-manual")
+    return api_agent_briefing()
+
+
+@app.post("/api/agent/briefing/<int:briefing_id>/dismiss")
+def api_agent_briefing_dismiss(briefing_id: int):
+    """Hide a briefing (its suggested actions expire with it)."""
+    try:
+        if not storage.dismiss_briefing(briefing_id):
+            return jsonify({"error": "That briefing was not found."}), 404
+        storage.expire_actions(source=watcher.SOURCE)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to dismiss briefing %s", briefing_id)
+        return jsonify({"error": "Couldn't dismiss that right now."}), 500
+    _emit_state("briefing", "agent", source="briefing-dismiss")
+    return jsonify({"dismissed": True})
 
 
 @app.get("/api/perishables")
@@ -583,7 +1004,7 @@ def api_add_perishable():
         return jsonify({"error": "Please enter what the item is."}), 400
     if len(name) > 80:
         return jsonify({"error": "That name is too long."}), 400
-    if not _valid_use_by(use_by):
+    if not kitchen.valid_use_by(use_by):
         return jsonify({"error": "Please enter a valid use-by date (YYYY-MM-DD)."}), 400
 
     try:
@@ -592,6 +1013,7 @@ def api_add_perishable():
         logger.exception("Failed to add perishable")
         return jsonify({"error": "Couldn't save that item right now."}), 500
     _emit_state("perishables", source="perishable-add")
+    _refresh_briefing("action")
     return (
         jsonify({"perishable": {"id": perishable_id, "name": name, "use_by": use_by}}),
         201,
@@ -634,36 +1056,23 @@ def api_resolve_perishable(perishable_id: int):
     shows up under "use soon". ``est_cost`` is an optional rough price for spend analytics.
     """
     payload = request.get_json(silent=True) or {}
-    event = str(payload.get("event", "")).strip().lower()
-    if event not in (storage.WASTE_USED, storage.WASTE_WASTED):
-        return jsonify({"error": "Mark the item as either 'used' or 'wasted'."}), 400
-    est_cost, cost_error = _parse_est_cost(payload.get("est_cost"))
+    est_cost, cost_error = kitchen.parse_est_cost(payload.get("est_cost"))
     if cost_error:
         return jsonify({"error": cost_error}), 400
 
     try:
-        item = storage.get_perishable(perishable_id)
-    except Exception:  # noqa: BLE001
-        logger.exception("Failed to load perishable %s", perishable_id)
-        return jsonify({"error": "Couldn't update that item right now."}), 500
-    if item is None:
-        return jsonify({"error": "That item was not found."}), 404
-
-    name = str(item.get("name", "")).strip()
-    try:
-        event_id = storage.log_waste_event(
-            name,
-            event,
-            token=recommender.normalize_ingredient(name),
-            est_cost=est_cost,
+        result = kitchen.resolve_perishable(
+            perishable_id, str(payload.get("event", "")), est_cost=est_cost
         )
-        storage.delete_perishable(perishable_id)
+    except kitchen.KitchenError as exc:
+        return jsonify({"error": exc.message}), exc.status_code
     except Exception:  # noqa: BLE001
         logger.exception("Failed to resolve perishable %s", perishable_id)
         return jsonify({"error": "Couldn't update that item right now."}), 500
     # Resolving a tracked item logs a waste/used event and drops it from the at-risk list.
-    _emit_state("perishables", "analytics", source="perishable-resolve")
-    return jsonify({"resolved": True, "event": event, "id": event_id, "name": name})
+    _emit_state(*result.pop("scopes"), source="perishable-resolve")
+    _refresh_briefing("action")
+    return jsonify(result)
 
 
 @app.post("/api/waste")
@@ -681,7 +1090,7 @@ def api_log_waste():
         return jsonify({"error": "That name is too long."}), 400
     if event not in (storage.WASTE_USED, storage.WASTE_WASTED):
         return jsonify({"error": "Mark the item as either 'used' or 'wasted'."}), 400
-    est_cost, cost_error = _parse_est_cost(payload.get("est_cost"))
+    est_cost, cost_error = kitchen.parse_est_cost(payload.get("est_cost"))
     if cost_error:
         return jsonify({"error": cost_error}), 400
 
@@ -710,6 +1119,33 @@ def api_analytics():
     return jsonify(analytics.summarize(events))
 
 
+@app.get("/api/restock")
+def api_restock():
+    """Predict which staples are running low, from usage history + what's on hand.
+
+    Combines four read-only sources — the append-only waste log (long-term usage history),
+    the current fridge, tracked perishables, and the open shopping list — and hands them to
+    :func:`restock.suggest_restock`, which decides what's worth topping up. Everything the UI
+    needs to render the Restock card comes back in one round-trip.
+    """
+    try:
+        events = storage.list_waste_events()
+        on_hand = (_current_inventory() or {}).get("items", [])
+        perishables = storage.list_perishables()
+        on_list = storage.list_shopping(include_done=False)
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to load restock inputs")
+        return jsonify({"error": "Couldn't work out your restock list right now."}), 500
+    return jsonify(
+        restock.suggest_restock(
+            events,
+            on_hand,
+            perishables=perishables,
+            on_list=on_list,
+        )
+    )
+
+
 @app.post("/api/cook")
 def api_cook():
     """Mark a planned meal cooked: decrement its ingredients from the fridge and log them used.
@@ -729,116 +1165,97 @@ def api_cook():
     """
     payload = request.get_json(silent=True) or {}
     title = str(payload.get("title", "")).strip()[:120]
-
-    entries = _cook_entries(payload)
-    if not entries:
-        return jsonify({"error": "Tell me which ingredients were used to cook this."}), 400
-    if len(entries) > 50:
-        return jsonify({"error": "That's a lot of ingredients — please cook fewer at once."}), 400
-
-    note = f"Cooked: {title}" if title else "Cooked a planned meal"
-    # How many units of each canonical ingredient this meal consumed — used to clear the
-    # right number of tracked perishables (not every entry that happens to share a name).
-    consumed_qty: dict[str, int] = {}
-    for e in entries:
-        token = recommender.normalize_ingredient(e["name"])
-        consumed_qty[token] = consumed_qty.get(token, 0) + e["qty"]
-    cleared_perishables = 0
     try:
-        # Ledger rows drive the inventory decrement...
-        recorded = storage.record_consumption(
-            [
-                {
-                    "name": e["name"],
-                    "token": recommender.normalize_ingredient(e["name"]),
-                    "qty": e["qty"],
-                }
-                for e in entries
-            ],
-            note=note,
-        )
-        # ...and a "used" event per ingredient feeds the waste/spend analytics.
-        for e in entries:
-            storage.log_waste_event(
-                e["name"],
-                storage.WASTE_USED,
-                token=recommender.normalize_ingredient(e["name"]),
-            )
-        # Cooking a meal also clears the tracked perishables it used up, so the at-risk
-        # list and future plans stop nagging about an ingredient that's now eaten. Clear
-        # only as many as were consumed (soonest use-by first, the order list_perishables
-        # returns), so tracking two blocks of cheese and cooking one meal clears one. The
-        # "used" event was already logged above, so delete without re-logging (which would
-        # double-count it in the analytics).
-        remaining = dict(consumed_qty)
-        for perishable in storage.list_perishables():
-            token = recommender.normalize_ingredient(perishable.get("name", ""))
-            if remaining.get(token, 0) > 0 and storage.delete_perishable(perishable["id"]):
-                remaining[token] -= 1
-                cleared_perishables += 1
+        result = kitchen.cook_meal(kitchen.cook_entries(payload), title=title)
+    except kitchen.KitchenError as exc:
+        return jsonify({"error": exc.message}), exc.status_code
     except Exception:  # noqa: BLE001 — never leak a stack trace
         logger.exception("Failed to record a cooked meal")
         return jsonify({"error": "Couldn't record that meal right now."}), 500
 
     try:
-        scan = _current_inventory()
+        result["scan"] = _current_inventory()
     except Exception:  # noqa: BLE001 — the write succeeded; a read failure shouldn't 500
         logger.exception("Cooked meal recorded but couldn't reload inventory")
-        scan = None
+        result["scan"] = None
 
     # Cooking touches three views at once: the fridge shrinks, waste analytics tick up,
     # and any tracked perishables it used up are cleared.
-    _emit_state("inventory", "analytics", "perishables", source="cook")
-
-    return (
-        jsonify(
-            {
-                "cooked": True,
-                "title": title or None,
-                "consumed": [e["name"] for e in entries],
-                "recorded": recorded,
-                "cleared_perishables": cleared_perishables,
-                "scan": scan,
-            }
-        ),
-        201,
-    )
+    _emit_state(*result.pop("scopes"), source="cook")
+    _refresh_briefing("action")
+    return jsonify(result), 201
 
 
-def _cook_entries(payload: dict) -> list[dict]:
-    """Normalize a cook request body into a de-duplicated ``[{name, qty}]`` list.
+# Longest receipt text we'll parse in one go — generous for a full grocery bill, but a guard
+# against someone pasting a novel.
+MAX_RECEIPT_CHARS = 20000
 
-    Accepts either ``uses`` (a list of ingredient names, one unit each) or ``items`` (a list
-    of ``{"name", "qty"}`` objects). Blank names and names over 80 chars are dropped; repeated
-    names are merged, summing their quantities.
+
+@app.post("/api/receipt/parse")
+def api_receipt_parse():
+    """Preview a pasted receipt as a list of grocery items. Body: ``{"text": str}``.
+
+    Read-only: nothing is written. Returns :func:`receipts.parse_receipt`'s reviewable
+    preview so the shopper can confirm before committing (see ``/api/receipt/import``).
     """
-    raw: list[tuple[str, int]] = []
-    for name in payload.get("uses") or []:
-        text = str(name).strip()
-        if text:
-            raw.append((text, 1))
-    for obj in payload.get("items") or []:
-        if not isinstance(obj, dict):
-            continue
-        text = str(obj.get("name", "")).strip()
-        if not text:
-            continue
-        try:
-            qty = int(obj.get("qty", 1))
-        except (TypeError, ValueError):
-            qty = 1
-        raw.append((text, max(1, qty)))
+    payload = request.get_json(silent=True) or {}
+    text = str(payload.get("text", ""))
+    if not text.strip():
+        return jsonify({"error": "Paste the text of your receipt first."}), 400
+    if len(text) > MAX_RECEIPT_CHARS:
+        return jsonify({"error": "That receipt is very long — paste just the item lines."}), 400
+    try:
+        preview = receipts.parse_receipt(text)
+    except Exception:  # noqa: BLE001 — parsing must never leak a stack trace
+        logger.exception("Failed to parse a receipt")
+        return jsonify({"error": "Couldn't read that receipt right now."}), 500
+    return jsonify(preview)
 
-    merged: dict[str, dict] = {}
-    for name, qty in raw:
-        if len(name) > 80:
-            continue
-        key = name.lower()
-        if key in merged:
-            merged[key]["qty"] += qty
-        else:
-            merged[key] = {"name": name, "qty": qty}
-    return list(merged.values())
+
+@app.post("/api/receipt/import")
+def api_receipt_import():
+    """Fold reviewed receipt items into the fridge. Body: ``{"items": [{"name", "qty"?}]}``.
+
+    Writes a new inventory snapshot (see :func:`kitchen.import_receipt`) and returns the
+    updated current inventory so the caller can refresh in one round-trip.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = kitchen.import_receipt(payload.get("items") or [])
+    except kitchen.KitchenError as exc:
+        return jsonify({"error": exc.message}), exc.status_code
+    except Exception:  # noqa: BLE001 — never leak a stack trace
+        logger.exception("Failed to import a receipt")
+        return jsonify({"error": "Couldn't add those items right now."}), 500
+
+    try:
+        result["scan"] = _current_inventory()
+    except Exception:  # noqa: BLE001 — the write succeeded; a read failure shouldn't 500
+        logger.exception("Receipt imported but couldn't reload inventory")
+        result["scan"] = None
+
+    _emit_state(*result.pop("scopes"), source="receipt-import")
+    _refresh_briefing("action")
+    return jsonify(result), 201
+
+
+@app.post("/api/leftovers")
+def api_save_leftovers():
+    """Track cooked leftovers as a perishable. Body: ``{"name": str, "days": int?}``."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = kitchen.save_leftovers(
+            str(payload.get("name", "")), payload.get("days", kitchen.DEFAULT_LEFTOVER_DAYS)
+        )
+    except kitchen.KitchenError as exc:
+        return jsonify({"error": exc.message}), exc.status_code
+    except Exception:  # noqa: BLE001 — never leak a stack trace
+        logger.exception("Failed to save leftovers")
+        return jsonify({"error": "Couldn't save those leftovers right now."}), 500
+
+    _emit_state(*result.pop("scopes"), source="leftovers")
+    _refresh_briefing("action")
+    return jsonify(result), 201
 
 
 def _current_inventory():
@@ -852,32 +1269,6 @@ def _current_inventory():
     return storage.get_current_inventory(normalize=recommender.normalize_ingredient)
 
 
-def _parse_est_cost(value) -> tuple[float | None, str | None]:
-    """Validate an optional cost from a request body.
-
-    Returns ``(cost, None)`` on success (cost may be ``None`` when omitted/blank), or
-    ``(None, message)`` when the value is present but not a non-negative number.
-    """
-    if value is None or value == "":
-        return None, None
-    try:
-        cost = float(value)
-    except (TypeError, ValueError):
-        return None, "Enter a cost as a number, or leave it blank."
-    if cost < 0:
-        return None, "Cost can't be negative."
-    return cost, None
-
-
-def _valid_use_by(value: str) -> bool:
-    """True if ``value`` is a real calendar date in ``YYYY-MM-DD`` form."""
-    try:
-        datetime.strptime(value, "%Y-%m-%d")
-        return True
-    except ValueError:
-        return False
-
-
 def _clamp_int(value, *, default: int, lo: int, hi: int) -> int:
     """Coerce a request value to an int clamped to [lo, hi], else ``default``."""
     try:
@@ -885,6 +1276,21 @@ def _clamp_int(value, *, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
+
+
+def _clamp_budget(value) -> float | None:
+    """Coerce an optional budget to a non-negative float, or ``None`` for 'no ceiling'.
+
+    Blanks, ``None``, and unparseable values all mean "don't constrain the shop". A negative
+    number is treated as zero (buy nothing new) rather than rejected.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, n)
 
 
 @app.errorhandler(413)

@@ -36,8 +36,10 @@ import logging
 import math
 import os
 import re
-from datetime import UTC, date, datetime
+from collections.abc import Callable, Mapping
+from datetime import UTC, date, datetime, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +294,19 @@ def _prettify(token: str) -> str:
     return token.replace("_", " ").capitalize()
 
 
+def is_known_ingredient(name: str) -> bool:
+    """True if ``name`` resolves onto a real ingredient we know (recipe token, alias,
+    or trained-embedding vocab), rather than an unrecognised string.
+
+    :func:`normalize_ingredient` always returns *something* (a cleaned token) so callers
+    can display it, but that token only lands in the resolvable vocab when the name was
+    actually recognised. Receipt import uses this to tell a grocery line ("Amul Milk")
+    from receipt noise that slipped past the meta-line filters.
+    """
+    token = normalize_ingredient(name)
+    return bool(token) and token in _resolvable_tokens()
+
+
 # --- Embedding math (pure Python) -------------------------------------------
 
 
@@ -339,6 +354,47 @@ def embed_ingredients(tokens: list[str]) -> list[float] | None:
     )
 
 
+def similar_ingredients(
+    token: str,
+    *,
+    k: int = 5,
+    candidates: Any = None,
+    min_similarity: float = 0.0,
+) -> list[tuple[str, float]]:
+    """Rank ingredient tokens most similar to ``token`` by trained-embedding cosine.
+
+    Returns up to ``k`` ``(token, similarity)`` pairs, most-similar first. Only tokens
+    that have a trained vector are considered, and the query token itself is always
+    excluded. ``candidates`` restricts the pool (any iterable of tokens); by default the
+    pool is every ingredient that appears in the recipe corpus, which keeps swap ideas
+    grounded in dishes the app can actually cook. Pairs scoring below ``min_similarity``
+    are dropped.
+
+    This powers Cook Mode's "swap ideas": the vectors are trained purely on ingredient
+    co-occurrence, so neighbours are ingredients that behave alike across recipes rather
+    than a curated substitution table — a best-effort enhancement, never a guarantee.
+    Returns an empty list when embeddings are unavailable or the token has no vector.
+    """
+    query = str(token).lower()
+    vectors = _load_embeddings()["vectors"]
+    base = vectors.get(query)
+    if not base:
+        return []
+    if candidates is None:
+        pool: set[str] = set(_known_tokens())
+    else:
+        pool = {str(c).lower() for c in candidates}
+    scored: list[tuple[str, float]] = []
+    for cand in pool:
+        if cand == query:
+            continue
+        sim = _cosine(base, vectors.get(cand))
+        if sim >= min_similarity:
+            scored.append((cand, sim))
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored[:k]
+
+
 # --- Date helpers ------------------------------------------------------------
 
 
@@ -353,6 +409,32 @@ def _parse_use_by(value: Any) -> date | None:
         return None
 
 
+def _local_zone() -> tzinfo:
+    """The household's time zone: ``APP_TIMEZONE`` (an IANA name), else this machine's."""
+    name = os.getenv("APP_TIMEZONE", "").strip()
+    if name.upper() == "UTC":
+        return UTC
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            logger.warning("Unknown APP_TIMEZONE %r; using the server's local time zone.", name)
+    return datetime.now().astimezone().tzinfo or UTC
+
+
+def local_today(now: datetime | None = None) -> date:
+    """Today's date on the household's calendar.
+
+    Use-by dates are entered as local calendar dates, so "days left" has to be counted from
+    the local date too. Counting from the UTC date is a day off for part of every day — in
+    India, from midnight to 05:30. ``now`` is a UTC instant (naive values are read as UTC).
+    """
+    when = now or datetime.now(UTC)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.astimezone(_local_zone()).date()
+
+
 # --- Public API --------------------------------------------------------------
 
 
@@ -363,6 +445,7 @@ def recommend(
     now: datetime | None = None,
     max_recipes: int = 6,
     use_soon_days: int = DEFAULT_USE_SOON_DAYS,
+    recipe_filter: Callable[[Mapping[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     """Produce use-soon, recipe, and shopping suggestions for the current fridge state.
 
@@ -375,13 +458,17 @@ def recommend(
             for deterministic testing.
         max_recipes: Maximum number of recipe suggestions to return.
         use_soon_days: A dated perishable within this many days is treated as "use soon".
+        recipe_filter: Optional predicate over a raw recipe dict; recipes it rejects are
+            never suggested (nor counted toward shopping ideas). The agent uses this to
+            honour remembered household rules — diet, allergies, dislikes (see
+            :mod:`preferences`).
 
     Returns:
         A JSON-serializable dict: ``{generated_at, use_soon, recipes, shopping, ml}``.
     """
     inventory_items = inventory_items or []
     perishables = perishables or []
-    today = (now or datetime.now(UTC)).date()
+    today = local_today(now)
 
     embeddings = _load_embeddings()
     vectors = embeddings["vectors"]
@@ -393,7 +480,7 @@ def recommend(
     )
 
     fridge_vec = _mean_vector(sorted(have), vectors, dim) if vectors else None
-    scored = _score_recipes(have, urgent, fridge_vec, vectors, dim)
+    scored = _score_recipes(have, urgent, fridge_vec, vectors, dim, recipe_filter)
 
     recipes = _top_recipes(scored, max_recipes)
     shopping = _shopping_from(scored)
@@ -522,14 +609,18 @@ def _score_recipes(
     fridge_vec: list[float] | None,
     vectors: dict[str, list[float]],
     dim: int,
+    recipe_filter: Callable[[Mapping[str, Any]], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Score every recipe against the current fridge, returning enriched, ranked rows.
 
     Only recipes with at least one ingredient on hand and either reasonable coverage or a
     use-soon ingredient are kept — no point suggesting a dish you have almost nothing for.
+    Recipes rejected by ``recipe_filter`` (household diet/allergy rules) are skipped.
     """
     scored: list[dict[str, Any]] = []
     for recipe in _load_recipes():
+        if recipe_filter is not None and not recipe_filter(recipe):
+            continue
         req = [t.lower() for t in recipe.get("ingredients", [])]
         req_set = set(req)
         if not req_set:

@@ -6,7 +6,7 @@ expiry math is deterministic.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -101,3 +101,32 @@ def test_far_off_use_by_is_not_use_soon():
     perishables = [{"name": "Paneer", "use_by": "2026-12-31"}]  # far away
     result = recommender.recommend([], perishables, now=now, use_soon_days=3)
     assert all(row["token"] != "paneer" for row in result["use_soon"])
+
+
+# 20:00 UTC on the 23rd is already 01:30 on the 24th in India. Use-by dates are typed in as
+# local dates, so "days left" must count from the local date, not the UTC one.
+LATE_EVENING_UTC = datetime(2026, 9, 23, 20, 0, tzinfo=UTC)
+
+
+def test_local_today_follows_the_household_time_zone(monkeypatch):
+    monkeypatch.setenv("APP_TIMEZONE", "Asia/Kolkata")
+    assert recommender.local_today(LATE_EVENING_UTC) == date(2026, 9, 24)
+    monkeypatch.setenv("APP_TIMEZONE", "UTC")
+    assert recommender.local_today(LATE_EVENING_UTC) == date(2026, 9, 23)
+    # A naive clock is read as UTC.
+    assert recommender.local_today(datetime(2026, 9, 23, 20, 0)) == date(2026, 9, 23)
+
+
+def test_unknown_time_zone_falls_back_to_the_server_zone(monkeypatch):
+    monkeypatch.setenv("APP_TIMEZONE", "Mars/Olympus_Mons")
+    expected = LATE_EVENING_UTC.astimezone().date()
+    assert recommender.local_today(LATE_EVENING_UTC) == expected
+
+
+def test_days_left_counts_from_the_local_date(monkeypatch):
+    monkeypatch.setenv("APP_TIMEZONE", "Asia/Kolkata")
+    perishables = [{"name": "Yogurt", "use_by": "2026-09-25"}]  # tomorrow, locally
+    result = recommender.recommend([], perishables, now=LATE_EVENING_UTC, use_soon_days=3)
+    yogurt = next(r for r in result["use_soon"] if r["token"] == "yogurt")
+    assert yogurt["days_left"] == 1
+    assert yogurt["reason"] == "1 day left"

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import budget
 import optimizer
 import recommender
 
@@ -168,3 +169,130 @@ def test_ilp_matches_or_beats_greedy_objective():
     greedy = optimizer.plan_meals(inv, perishables, now=NOW, days=2, meals_per_day=2, solver="greedy")
     ilp = optimizer.plan_meals(inv, perishables, now=NOW, days=2, meals_per_day=2, solver="ilp")
     assert ilp["metrics"]["objective"] >= greedy["metrics"]["objective"] - 1e-6
+
+
+# --- Budget layer (Autopilot pricing) ----------------------------------------
+#
+# When a ``cost_of`` hook is supplied the plan is priced; with ``max_budget`` the shop is
+# constrained. Both engines must respect the ceiling and expose the same cost contract.
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_pricing_is_off_by_default(engine):
+    # No cost_of hook → no cost fields anywhere (backwards-compatible payload).
+    result = optimizer.plan_meals(
+        _items("paneer", "tomato", "onion", "rice"), now=NOW, solver=engine
+    )
+    assert "currency" not in result["metrics"]
+    assert "shopping_cost" not in result["metrics"]
+    for meal in result["plan"]:
+        assert "est_cost" not in meal
+    for row in result["shopping_list"]:
+        assert "est_cost" not in row
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_cost_of_hook_prices_the_whole_plan(engine):
+    result = optimizer.plan_meals(
+        _items("paneer", "tomato", "onion", "rice"),
+        now=NOW,
+        days=2,
+        meals_per_day=2,
+        solver=engine,
+        cost_of=budget.price_of,
+    )
+    m = result["metrics"]
+    assert m["currency"] == budget.CURRENCY
+    assert m["shopping_cost"] >= 0.0
+    assert m["pantry_value_used"] >= 0.0
+    # Each meal is priced; est_cost sums its to-buy items, pantry_value its on-hand items.
+    for meal in result["plan"]:
+        assert isinstance(meal["est_cost"], (int, float)) and meal["est_cost"] >= 0.0
+        assert isinstance(meal["pantry_value"], (int, float)) and meal["pantry_value"] >= 0.0
+    # Each shopping row is priced.
+    for row in result["shopping_list"]:
+        assert isinstance(row["est_cost"], (int, float)) and row["est_cost"] >= 0.0
+    # The shop's cost counts each distinct bought ingredient once — so it never exceeds the
+    # naive sum of per-meal est_cost (which would double-count a shared new ingredient).
+    assert m["shopping_cost"] <= sum(meal["est_cost"] for meal in result["plan"]) + 1e-6
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_shopping_cost_equals_distinct_bought_prices(engine):
+    result = optimizer.plan_meals(
+        _items("tomato", "onion", "rice"),
+        now=NOW,
+        days=2,
+        meals_per_day=2,
+        solver=engine,
+        cost_of=budget.price_of,
+    )
+    # The reported shopping_cost is exactly the sum of the priced shopping-list rows.
+    expected = round(sum(row["est_cost"] for row in result["shopping_list"]), 2)
+    assert result["metrics"]["shopping_cost"] == pytest.approx(expected, abs=0.01)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_max_budget_is_a_hard_ceiling(engine):
+    # A stingy budget must not be exceeded, whichever engine plans, and the plan is flagged
+    # as within budget.
+    result = optimizer.plan_meals(
+        _items("tomato", "onion", "rice", "potato"),
+        now=NOW,
+        days=3,
+        meals_per_day=2,
+        solver=engine,
+        cost_of=budget.price_of,
+        max_budget=15.0,
+    )
+    m = result["metrics"]
+    assert m["budget"] == 15.0
+    assert m["shopping_cost"] <= 15.0 + 1e-6
+    assert m["within_budget"] is True
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_zero_budget_forbids_any_shopping(engine):
+    # With a zero budget, no dish that requires buying anything (priced > 0) may be scheduled;
+    # every planned meal must be fully cookable from what's on hand.
+    result = optimizer.plan_meals(
+        _items("tomato", "onion", "rice", "potato", "spinach"),
+        now=NOW,
+        days=3,
+        meals_per_day=2,
+        solver=engine,
+        cost_of=budget.price_of,
+        max_budget=0.0,
+    )
+    assert result["metrics"]["shopping_cost"] == pytest.approx(0.0, abs=0.01)
+    for meal in result["plan"]:
+        assert meal["est_cost"] == pytest.approx(0.0, abs=0.01)
+
+
+@pytest.mark.parametrize("engine", _ENGINES)
+def test_budget_ignored_without_cost_hook(engine):
+    # max_budget alone (no cost_of) is a no-op: the plan is unpriced and unconstrained.
+    result = optimizer.plan_meals(
+        _items("tomato", "onion", "rice"),
+        now=NOW,
+        solver=engine,
+        max_budget=1.0,
+    )
+    assert "budget" not in result["metrics"]
+    assert "shopping_cost" not in result["metrics"]
+
+
+@pytest.mark.skipif(not optimizer._HAS_PULP, reason="PuLP not installed")
+def test_tighter_budget_never_raises_shopping_cost():
+    # Monotonicity: shrinking the budget can only lower (or hold) the exact solver's spend.
+    inv = _items("tomato", "onion", "rice", "potato", "spinach", "paneer")
+    loose = optimizer.plan_meals(
+        inv, now=NOW, days=3, meals_per_day=2, solver="ilp",
+        cost_of=budget.price_of, max_budget=200.0,
+    )
+    tight = optimizer.plan_meals(
+        inv, now=NOW, days=3, meals_per_day=2, solver="ilp",
+        cost_of=budget.price_of, max_budget=30.0,
+    )
+    assert tight["metrics"]["shopping_cost"] <= loose["metrics"]["shopping_cost"] + 1e-6
+    assert tight["metrics"]["shopping_cost"] <= 30.0 + 1e-6

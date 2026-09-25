@@ -75,25 +75,73 @@ def test_api_plan_defaults_and_clamps(client):
     assert horizon["days"] == 7 and horizon["meals_per_day"] == 1
 
 
+def test_api_plan_is_priced_and_grouped_by_day(client, monkeypatch, clean_db):
+    # A stocked fridge yields a priced plan with per-day buckets for the Autopilot view.
+    monkeypatch.setattr(
+        "app.storage.get_current_inventory",
+        lambda **_kw: {"items": [
+            {"name": "Paneer"}, {"name": "Tomato"}, {"name": "Onion"}, {"name": "Rice"},
+        ]},
+    )
+    resp = client.post("/api/plan", json={"days": 2, "meals_per_day": 2})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    # Costs are present.
+    assert "currency" in body["metrics"]
+    assert "shopping_cost" in body["metrics"]
+    # by_day is a list of buckets whose meals sum to the flat plan.
+    assert isinstance(body["by_day"], list)
+    assert sum(len(d["meals"]) for d in body["by_day"]) == len(body["plan"])
+    if body["plan"]:
+        assert "est_cost" in body["plan"][0]
+
+
+def test_api_plan_honours_a_budget_ceiling(client, monkeypatch, clean_db):
+    monkeypatch.setattr(
+        "app.storage.get_current_inventory",
+        lambda **_kw: {"items": [
+            {"name": "Tomato"}, {"name": "Onion"}, {"name": "Rice"}, {"name": "Potato"},
+        ]},
+    )
+    resp = client.post("/api/plan", json={"days": 3, "meals_per_day": 2, "budget": 15})
+    assert resp.status_code == 200
+    m = resp.get_json()["metrics"]
+    assert m["budget"] == 15.0
+    assert m["shopping_cost"] <= 15.0 + 1e-6
+    assert m["within_budget"] is True
+
+
+def test_api_plan_bad_budget_is_ignored(client):
+    # A non-numeric budget doesn't error — it's treated as "no ceiling".
+    resp = client.post("/api/plan", json={"days": 1, "meals_per_day": 2, "budget": "lots"})
+    assert resp.status_code == 200
+    assert "budget" not in resp.get_json()["metrics"]
+
+
 def test_api_agent_requires_message(client):
     resp = client.post("/api/agent", json={"message": "   "})
     assert resp.status_code == 400
 
 
-def test_api_agent_unconfigured_returns_503(client, monkeypatch):
-    # Force the agent to look unconfigured regardless of the test env.
+def test_api_agent_unconfigured_answers_offline(client, monkeypatch, clean_db):
+    # No LLM key: Chef still answers, with the rules-based fallback (not a 503).
     monkeypatch.setattr("app.agent.configured", lambda: False)
     resp = client.post("/api/agent", json={"message": "what can I cook?"})
-    assert resp.status_code == 503
-    assert "error" in resp.get_json()
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["mode"] == "offline"
+    assert body["answer"]
 
 
 def test_api_agent_happy_path_with_stubbed_model(client, monkeypatch):
     monkeypatch.setattr("app.agent.configured", lambda: True)
 
     def fake_run_agent(message, *, tools, history=None, **kwargs):
-        # Confirm the web layer wired real tools to the agent.
-        assert set(tools) == {"get_inventory", "get_recommendations", "plan_meals"}
+        # Confirm the web layer wired the full real toolset to the agent.
+        assert {"get_inventory", "get_recommendations", "plan_meals", "autopilot_week",
+                "search_recipes", "get_waste_report", "get_shopping_list", "get_preferences",
+                "remember_preference", "forget_preference", "add_to_shopping_list",
+                "propose_cook_meal", "propose_track_expiry", "propose_log_item"} == set(tools)
         return {"answer": "Try paneer bhurji.", "steps": [], "mode": "json", "model": "test"}
 
     monkeypatch.setattr("app.agent.run_agent", fake_run_agent)
@@ -224,6 +272,110 @@ def test_api_waste_log_feeds_analytics(client, clean_db):
     assert body["top_wasted"][0]["name"] == "Spinach"
 
 
+def test_api_restock_shape_empty(client, clean_db):
+    resp = client.get("/api/restock")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert {"items", "count", "total_cost", "currency", "window_weeks", "has_data", "headline"} <= set(body)
+    assert body["has_data"] is False
+    assert body["count"] == 0
+    assert body["items"] == []
+
+
+def test_api_restock_flags_depleted_staple(client, clean_db):
+    # A fresh scan without Paneer (latest scan wins; clean_db leaves earlier scans in place).
+    app_module.storage.save_scan(
+        {"items": [{"name": "Rice", "count": 1}], "unidentified": []},
+        app_module.storage.SOURCE_UPLOAD,
+    )
+    # Go through Paneer repeatedly (logged used) with none in the fridge → flagged "out".
+    for _ in range(3):
+        assert client.post("/api/waste", json={"name": "Paneer", "event": "used"}).status_code == 201
+
+    body = client.get("/api/restock").get_json()
+    assert body["has_data"] is True
+    tokens = {i["token"]: i for i in body["items"]}
+    assert "paneer" in tokens
+    assert tokens["paneer"]["status"] == "out"
+    assert tokens["paneer"]["uses"] == 3
+    assert body["count"] >= 1
+
+
+def test_api_restock_skips_what_is_on_hand(client, clean_db):
+    # Same usage, but Paneer is sitting in the fridge → not suggested.
+    app_module.storage.save_scan(
+        {"items": [{"name": "Paneer", "count": 2}], "unidentified": []},
+        app_module.storage.SOURCE_UPLOAD,
+    )
+    for _ in range(3):
+        client.post("/api/waste", json={"name": "Paneer", "event": "used"})
+
+    body = client.get("/api/restock").get_json()
+    assert all(i["token"] != "paneer" for i in body["items"])
+
+
+def test_api_restock_skips_items_already_on_shopping_list(client, clean_db):
+    app_module.storage.save_scan(
+        {"items": [{"name": "Rice", "count": 1}], "unidentified": []},
+        app_module.storage.SOURCE_UPLOAD,
+    )
+    for _ in range(3):
+        client.post("/api/waste", json={"name": "Paneer", "event": "used"})
+    # Queue Paneer to buy → the nudge shouldn't repeat it.
+    assert client.post("/api/shopping", json={"items": [{"name": "Paneer"}]}).status_code in (200, 201)
+
+    body = client.get("/api/restock").get_json()
+    assert all(i["token"] != "paneer" for i in body["items"])
+
+
+def test_api_receipt_parse_previews_items_without_writing(client, clean_db):
+    text = "Amul Milk 500ml 2 x 27.00 54.00\nTomato 1kg 40.00\nTotal 94.00\nThank you"
+    before = len(app_module.storage.list_scans())
+    resp = client.post("/api/receipt/parse", json={"text": text})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    tokens = {i["token"] for i in body["items"]}
+    assert "milk" in tokens and "tomato" in tokens
+    assert "total" not in tokens
+    # Preview is read-only: no scan was written.
+    assert len(app_module.storage.list_scans()) == before
+
+
+def test_api_receipt_parse_rejects_blank(client, clean_db):
+    assert client.post("/api/receipt/parse", json={"text": "   "}).status_code == 400
+
+
+def test_api_receipt_import_adds_items_to_the_fridge(client, clean_db):
+    # Authoritative empty fridge (clean_db leaves earlier scans in place).
+    app_module.storage.save_scan({"items": [], "unidentified": []}, app_module.storage.SOURCE_UPLOAD)
+    resp = client.post(
+        "/api/receipt/import",
+        json={"items": [{"name": "Tomato", "qty": 2}, {"name": "Paneer", "qty": 1}]},
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["added"] == 2
+    names = {i["name"]: i["count"] for i in body["scan"]["items"]}
+    assert names.get("Tomato") == 2 and names.get("Paneer") == 1
+
+
+def test_api_receipt_import_rejects_empty(client, clean_db):
+    assert client.post("/api/receipt/import", json={"items": []}).status_code == 400
+
+
+def test_api_leftovers_tracks_a_perishable(client, clean_db):
+    resp = client.post("/api/leftovers", json={"name": "Palak Paneer", "days": 3})
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["perishable"]["name"] == "Leftover Palak Paneer"
+    names = [p["name"] for p in app_module.storage.list_perishables()]
+    assert "Leftover Palak Paneer" in names
+
+
+def test_api_leftovers_rejects_blank(client, clean_db):
+    assert client.post("/api/leftovers", json={"name": ""}).status_code == 400
+
+
 def test_api_resolve_perishable(client, clean_db):
     created = client.post("/api/perishables", json={"name": "Paneer", "use_by": "2026-10-01"})
     pid = created.get_json()["perishable"]["id"]
@@ -311,6 +463,56 @@ def test_api_cook_clears_only_the_consumed_quantity_of_a_perishable(client, clea
     # One block of cheese is still tracked (the later use-by; soonest is cleared first).
     remaining = client.get("/api/perishables").get_json()["perishables"]
     assert [p["use_by"] for p in remaining] == ["2026-10-05"]
+
+
+def test_api_cook_session_returns_a_full_guided_walkthrough(client, clean_db):
+    # Seed a fridge with two of the curry's ingredients so the checklist has have/missing marks.
+    app_module.storage.save_scan(
+        {"items": [{"name": "Paneer", "count": 1}, {"name": "Tomato", "count": 2}],
+         "unidentified": []},
+        app_module.storage.SOURCE_UPLOAD,
+    )
+
+    resp = client.get("/api/cook/paneer_butter_masala")
+    assert resp.status_code == 200
+    body = resp.get_json()
+
+    # The shape the Cook Mode UI renders.
+    assert body["recipe_id"] == "paneer_butter_masala"
+    assert body["title"]
+    assert body["method"] == "curry"
+    assert body["total_count"] == len(body["ingredients"])
+    assert body["have_count"] + body["missing_count"] == body["total_count"]
+
+    # Steps are numbered 1..N and the timer total is self-consistent.
+    steps = body["steps"]
+    assert [s["n"] for s in steps] == list(range(1, len(steps) + 1))
+    assert body["total_timer_seconds"] == sum(s["seconds"] for s in steps)
+
+    # The seeded fridge is reflected in the checklist.
+    have = {i["token"] for i in body["ingredients"] if i["have"]}
+    assert {"paneer", "tomato"} <= have
+
+
+def test_api_cook_session_unknown_recipe_is_404(client, clean_db):
+    resp = client.get("/api/cook/not_a_real_recipe")
+    assert resp.status_code == 404
+    assert "error" in resp.get_json()
+
+
+def test_api_cook_session_never_suggests_meat_for_a_vegetarian_dish(client, clean_db):
+    # The vegetarian guard must hold through the HTTP layer too, not just in the module.
+    body = client.get("/api/cook/paneer_butter_masala").get_json()
+    suggested = {s["token"] for i in body["ingredients"] for s in i["substitutes"]}
+    assert not (suggested & {"chicken", "egg", "mutton", "fish", "prawn"})
+
+
+def test_api_cook_session_honours_dietary_exclusions_in_swaps(client, clean_db):
+    # A disliked ingredient recorded in memory must never appear as a swap idea.
+    app_module.storage.set_memory("dislikes", ["cheese"])
+    body = client.get("/api/cook/paneer_butter_masala").get_json()
+    suggested = {s["token"] for i in body["ingredients"] for s in i["substitutes"]}
+    assert "cheese" not in suggested
 
 
 # --- Semantic recipe search -------------------------------------------------

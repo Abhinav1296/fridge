@@ -11,32 +11,53 @@
 
 // --- Element references -----------------------------------------------------
 const els = {
-  tabFridge: document.getElementById("tab-fridge"),
-  tabSuggestions: document.getElementById("tab-suggestions"),
-  tabPlan: document.getElementById("tab-plan"),
-  tabNutrition: document.getElementById("tab-nutrition"),
-  tabAnalytics: document.getElementById("tab-analytics"),
-  tabChef: document.getElementById("tab-chef"),
-  tabUpload: document.getElementById("tab-upload"),
-  tabWebcam: document.getElementById("tab-webcam"),
-  tabHistory: document.getElementById("tab-history"),
-  panelFridge: document.getElementById("panel-fridge"),
-  panelSuggestions: document.getElementById("panel-suggestions"),
+  // Frost shell: the seven top-level destinations, the nav surfaces that switch
+  // between them (frosted sidebar on laptop, glass tab bar + "more" sheet on phone),
+  // and the segmented sub-navs inside Scan / Plan / Insights.
+  dests: {
+    fridge: document.getElementById("dest-fridge"),
+    recipes: document.getElementById("dest-recipes"),
+    scan: document.getElementById("dest-scan"),
+    chef: document.getElementById("dest-chef"),
+    cart: document.getElementById("dest-cart"),
+    plan: document.getElementById("dest-plan"),
+    insights: document.getElementById("dest-insights"),
+  },
+  // Every [data-dest] button across the sidebar, bottom tab bar and more-sheet.
+  destItems: Array.from(document.querySelectorAll("[data-dest]")),
+
+  // Plan (meal plan | nutrition) and Insights (analytics | history) sub-panels,
+  // toggled by their [data-sub] segmented controls.
+  subItems: Array.from(document.querySelectorAll("[data-sub]")),
   panelPlan: document.getElementById("panel-plan"),
   panelNutrition: document.getElementById("panel-nutrition"),
   panelAnalytics: document.getElementById("panel-analytics"),
-  panelChef: document.getElementById("panel-chef"),
+  panelHistory: document.getElementById("panel-history"),
+
+  // Scan source (Upload | Webcam) merged into one destination via a segmented control.
+  scanModeItems: Array.from(document.querySelectorAll("#dest-scan [data-mode]")),
   panelUpload: document.getElementById("panel-upload"),
   panelWebcam: document.getElementById("panel-webcam"),
-  panelHistory: document.getElementById("panel-history"),
+
+  // Theme toggles (laptop + phone), the phone "more" sheet, and the frost canvas.
+  themeToggle: document.getElementById("theme-toggle"),
+  themeToggleM: document.getElementById("theme-toggle-m"),
+  menuBtn: document.getElementById("menu-btn"),
+  moreSheet: document.getElementById("more-sheet"),
+  sheetOverlay: document.getElementById("sheet-overlay"),
+  frostCanvas: document.getElementById("frost-canvas"),
+
+  // Cart count badges on the Cart nav item (sidebar + bottom bar).
+  navCartCount: document.getElementById("nav-cart-count"),
+  tabbarCartCount: document.getElementById("tabbar-cart-count"),
 
   // Real-time status indicator + transient "just updated" toast.
   liveStatus: document.getElementById("live-status"),
   liveLabel: document.getElementById("live-label"),
   liveToast: document.getElementById("live-toast"),
 
-  // Wrapper (display:contents) around the whole capture flow. Only the Upload and
-  // Webcam tabs show it; Fridge and History hide it.
+  // Wrapper (display:contents) around the whole capture flow (preview/loading/results).
+  // It lives inside the Scan destination, so it's naturally scoped to that view.
   captureExtras: document.getElementById("capture-extras"),
 
   // Fridge tab (current inventory = most recent scan).
@@ -92,16 +113,23 @@ const els = {
   // Meal Plan tab elements.
   planDays: document.getElementById("plan-days"),
   planMeals: document.getElementById("plan-meals"),
+  planBudget: document.getElementById("plan-budget"),
+  planBudgetCur: document.getElementById("plan-budget-cur"),
   planBuild: document.getElementById("plan-build"),
+  planWeek: document.getElementById("plan-week"),
   planLoading: document.getElementById("plan-loading"),
   planError: document.getElementById("plan-error"),
   planBody: document.getElementById("plan-body"),
   planMetrics: document.getElementById("plan-metrics"),
   planNotes: document.getElementById("plan-notes"),
   planEmpty: document.getElementById("plan-empty"),
+  planBydaySection: document.getElementById("plan-byday-section"),
+  planByday: document.getElementById("plan-byday"),
   planMealsList: document.getElementById("plan-meals-list"),
   planShoppingSection: document.getElementById("plan-shopping-section"),
   planShoppingCount: document.getElementById("plan-shopping-count"),
+  planShoppingAddall: document.getElementById("plan-shopping-addall"),
+  planShoppingAdded: document.getElementById("plan-shopping-added"),
   planShopping: document.getElementById("plan-shopping"),
   planAtriskSection: document.getElementById("plan-atrisk-section"),
   planAtrisk: document.getElementById("plan-atrisk"),
@@ -159,6 +187,58 @@ const els = {
   chefForm: document.getElementById("chef-form"),
   chefInput: document.getElementById("chef-input"),
   chefSend: document.getElementById("chef-send"),
+  chefMode: document.getElementById("chef-mode"),
+  chefWaiting: document.getElementById("chef-waiting"),
+  chefWaitingList: document.getElementById("chef-waiting-list"),
+
+  // Chef's memory + shopping list (Chef tab side cards).
+  memDiet: document.getElementById("mem-diet"),
+  memAllergies: document.getElementById("mem-allergies"),
+  memDislikes: document.getElementById("mem-dislikes"),
+  memAllergyForm: document.getElementById("mem-allergy-form"),
+  memDislikeForm: document.getElementById("mem-dislike-form"),
+  memOther: document.getElementById("mem-other"),
+  memClear: document.getElementById("mem-clear"),
+  memError: document.getElementById("mem-error"),
+  shopForm: document.getElementById("shop-form"),
+  shopInput: document.getElementById("shop-input"),
+  shopMsg: document.getElementById("shop-msg"),
+  shopList: document.getElementById("shop-list"),
+  shopEmpty: document.getElementById("shop-empty"),
+  shopCount: document.getElementById("shop-count"),
+  shopClear: document.getElementById("shop-clear"),
+
+  // Smart restock card (Cart tab): staples predicted low from usage history.
+  restockCard: document.getElementById("restock-card"),
+  restockCount: document.getElementById("restock-count"),
+  restockAddall: document.getElementById("restock-addall"),
+  restockHeadline: document.getElementById("restock-headline"),
+  restockAdded: document.getElementById("restock-added"),
+  restockList: document.getElementById("restock-list"),
+
+  // Receipt import (Scan tab): paste receipt text → preview groceries → add to fridge.
+  receiptForm: document.getElementById("receipt-form"),
+  receiptText: document.getElementById("receipt-text"),
+  receiptPreview: document.getElementById("receipt-preview"),
+  receiptClear: document.getElementById("receipt-clear"),
+  receiptError: document.getElementById("receipt-error"),
+  receiptAdded: document.getElementById("receipt-added"),
+  receiptResult: document.getElementById("receipt-result"),
+  receiptCount: document.getElementById("receipt-count"),
+  receiptSummary: document.getElementById("receipt-summary"),
+  receiptList: document.getElementById("receipt-list"),
+  receiptImport: document.getElementById("receipt-import"),
+  receiptImportHint: document.getElementById("receipt-import-hint"),
+
+  // Chef's proactive briefing (My Fridge tab).
+  briefing: document.getElementById("briefing"),
+  briefingWhen: document.getElementById("briefing-when"),
+  briefingHeadline: document.getElementById("briefing-headline"),
+  briefingLines: document.getElementById("briefing-lines"),
+  briefingActions: document.getElementById("briefing-actions"),
+  briefingDismiss: document.getElementById("briefing-dismiss"),
+  briefingCheck: document.getElementById("briefing-check"),
+  briefingError: document.getElementById("briefing-error"),
 
   dropzone: document.getElementById("dropzone"),
   fileInput: document.getElementById("file-input"),
@@ -231,95 +311,306 @@ let wasteBusy = false;
 // The Chef holds a short running transcript so follow-up questions have context.
 const chefHistory = [];
 let chefBusy = false;
+// The Chef tab's memory + shopping cards load on first open, then follow live updates.
+let chefLoadedOnce = false;
+// The live Socket.IO connection (null when real-time is unavailable). The Chef streams its
+// working steps to this tab over it while an answer is being prepared.
+let liveSocket = null;
+// The Chef run currently streaming steps into its "thinking" bubble.
+let activeChefRun = null;
 
-// Which tabs the user has opened at least once. A real-time "state_changed" push only
-// re-fetches a tab's data if that tab has actually been loaded, so a background update
-// never eagerly populates a panel the user has never visited (matching the lazy-load model).
-const tabsSeen = new Set(["fridge"]);
+// Which destinations the user has opened at least once. A real-time "state_changed"
+// push only re-fetches a view if it has actually been loaded, so a background update
+// never eagerly populates a view the user has never visited (the lazy-load model).
+const destsSeen = new Set(["fridge"]);
 
-// --- Tab switching ----------------------------------------------------------
-function activateTab(which) {
-  const tabs = {
-    fridge: [els.tabFridge, els.panelFridge],
-    suggestions: [els.tabSuggestions, els.panelSuggestions],
-    plan: [els.tabPlan, els.panelPlan],
-    nutrition: [els.tabNutrition, els.panelNutrition],
-    analytics: [els.tabAnalytics, els.panelAnalytics],
-    chef: [els.tabChef, els.panelChef],
-    upload: [els.tabUpload, els.panelUpload],
-    webcam: [els.tabWebcam, els.panelWebcam],
-    history: [els.tabHistory, els.panelHistory],
-  };
+// The current sub-view within Plan (meal plan | nutrition) and Insights (analytics |
+// history), and the current Scan source (upload | webcam). These persist across
+// destination switches so returning to Plan/Insights/Scan restores the last sub-view.
+const activeSub = { plan: "plan", insights: "analytics" };
+let scanMode = "upload";
+// Handle for the frost-particle animation loop (so we can pause it when the tab hides).
+let frostRaf = null;
 
-  tabsSeen.add(which);
+// --- Destination switching --------------------------------------------------
+// One entry point drives every nav surface. It shows the chosen destination, mirrors
+// the selection onto the sidebar / bottom bar / more-sheet, scopes the cameras to
+// where they live, and lazily loads each view's data the same way the old tabs did.
+function activateDest(which) {
+  if (!els.dests[which]) which = "fridge";
+  destsSeen.add(which);
 
-  for (const [name, [tab, panel]] of Object.entries(tabs)) {
-    const active = name === which;
-    tab.classList.toggle("active", active);
-    tab.setAttribute("aria-selected", String(active));
-    panel.hidden = !active;
+  for (const [name, node] of Object.entries(els.dests)) {
+    if (node) node.hidden = name !== which;
   }
-
-  // The webcam camera belongs only to the Webcam tab; the barcode camera only to Nutrition.
-  if (which !== "webcam") {
-    stopCamera();
+  for (const item of els.destItems) {
+    item.classList.toggle("active", item.dataset.dest === which);
   }
-  if (which !== "nutrition") {
-    stopBarcodeScan();
-  }
+  closeMoreSheet();
 
-  // The capture flow (preview/loading/results) belongs only to the Upload and Webcam
-  // tabs; hide it on Fridge/History. Reload data when entering a data-backed tab.
-  els.captureExtras.hidden = which !== "upload" && which !== "webcam";
-  if (which === "fridge") {
-    loadFridge();
-  } else if (which === "history") {
-    loadHistory();
-  } else if (which === "suggestions") {
-    loadPerishables();
-    loadSuggestions();
-  } else if (which === "plan") {
-    // Build a plan automatically the first time the tab is opened; after that the user
-    // rebuilds explicitly (so changing days/meals doesn't re-solve on every tab switch).
-    if (!planLoadedOnce) {
-      planLoadedOnce = true;
-      loadPlan();
-    }
-  } else if (which === "nutrition") {
-    // Load the cached dashboard on first open; the "Refresh" button pulls live data.
-    if (!nutritionLoadedOnce) {
-      nutritionLoadedOnce = true;
-      loadNutrition();
-    }
-  } else if (which === "analytics") {
-    // Load the waste-log summary on first open; the "Refresh" button re-pulls it.
-    if (!analyticsLoadedOnce) {
-      analyticsLoadedOnce = true;
-      loadAnalytics();
-    }
-  } else if (which === "chef") {
-    els.chefInput.focus();
+  // Cameras are scoped to their home view: the webcam to Scan→Webcam, the barcode
+  // scanner to Plan→Nutrition. Leaving either releases the stream.
+  if (!(which === "scan" && scanMode === "webcam")) stopCamera();
+  if (!(which === "plan" && activeSub.plan === "nutrition")) stopBarcodeScan();
+
+  switch (which) {
+    case "fridge":
+      loadFridge();
+      loadBriefing();
+      break;
+    case "recipes":
+      loadPerishables();
+      loadSuggestions();
+      break;
+    case "scan":
+      applyScanMode();
+      break;
+    case "cart":
+      loadShopping();
+      loadRestock();
+      break;
+    case "chef":
+      if (!chefLoadedOnce) {
+        chefLoadedOnce = true;
+        loadMemory();
+      }
+      syncActions();
+      els.chefInput.focus();
+      break;
+    case "plan":
+      applySub("plan");
+      break;
+    case "insights":
+      applySub("insights");
+      break;
   }
 }
 
-els.tabFridge.addEventListener("click", () => activateTab("fridge"));
-els.tabSuggestions.addEventListener("click", () => activateTab("suggestions"));
-els.tabPlan.addEventListener("click", () => activateTab("plan"));
-els.tabNutrition.addEventListener("click", () => activateTab("nutrition"));
-els.tabAnalytics.addEventListener("click", () => activateTab("analytics"));
-els.tabChef.addEventListener("click", () => activateTab("chef"));
-els.tabUpload.addEventListener("click", () => activateTab("upload"));
-els.tabWebcam.addEventListener("click", () => activateTab("webcam"));
-els.tabHistory.addEventListener("click", () => activateTab("history"));
+// Sub-navigation inside Plan and Insights. `sub` (optional) switches the active view;
+// with no argument it just (re)applies the current one — used when entering the dest.
+function applySub(group, sub) {
+  if (sub) activeSub[group] = sub;
+  const current = activeSub[group];
+
+  if (group === "plan") {
+    els.panelPlan.hidden = current !== "plan";
+    els.panelNutrition.hidden = current !== "nutrition";
+    if (current !== "nutrition") stopBarcodeScan(); // scanner lives in Nutrition
+    if (current === "plan" && !planLoadedOnce) {
+      // Solve automatically on first open; afterwards the user rebuilds explicitly.
+      planLoadedOnce = true;
+      loadPlan();
+    } else if (current === "nutrition" && !nutritionLoadedOnce) {
+      nutritionLoadedOnce = true;
+      loadNutrition();
+    }
+  } else if (group === "insights") {
+    els.panelAnalytics.hidden = current !== "analytics";
+    els.panelHistory.hidden = current !== "history";
+    if (current === "analytics") {
+      if (!analyticsLoadedOnce) {
+        analyticsLoadedOnce = true;
+        loadAnalytics();
+      }
+    } else if (current === "history") {
+      loadHistory();
+    }
+  }
+
+  for (const item of els.subItems) {
+    if (item.dataset.destSub !== group) continue;
+    const on = item.dataset.sub === current;
+    item.classList.toggle("active", on);
+    item.setAttribute("aria-selected", String(on));
+  }
+}
+
+// Scan source (Upload | Webcam) — merged into one destination via a segmented control.
+function setScanMode(mode) {
+  scanMode = mode === "webcam" ? "webcam" : "upload";
+  applyScanMode();
+}
+
+function applyScanMode() {
+  els.panelUpload.hidden = scanMode !== "upload";
+  els.panelWebcam.hidden = scanMode !== "webcam";
+  if (scanMode !== "webcam") stopCamera();
+  for (const item of els.scanModeItems) {
+    const on = item.dataset.mode === scanMode;
+    item.classList.toggle("active", on);
+    item.setAttribute("aria-selected", String(on));
+  }
+  els.captureExtras.hidden = false;
+}
+
+// --- Phone "more" sheet (Plan / Insights live here on small screens) --------
+function openMoreSheet() {
+  if (els.moreSheet) els.moreSheet.hidden = false;
+  if (els.sheetOverlay) els.sheetOverlay.hidden = false;
+  if (els.menuBtn) els.menuBtn.setAttribute("aria-expanded", "true");
+}
+function closeMoreSheet() {
+  if (els.moreSheet) els.moreSheet.hidden = true;
+  if (els.sheetOverlay) els.sheetOverlay.hidden = true;
+  if (els.menuBtn) els.menuBtn.setAttribute("aria-expanded", "false");
+}
+
+// --- Theme (manual light/dark toggle, persisted; light by default) ----------
+function updateThemeColor() {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) return;
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  meta.setAttribute("content", dark ? "#071523" : "#eaf6ff");
+}
+function initTheme() {
+  let saved = null;
+  try {
+    saved = localStorage.getItem("frost-theme");
+  } catch (_e) {
+    /* storage blocked (private mode) — fall back to the light default */
+  }
+  if (saved === "dark" || saved === "light") {
+    document.documentElement.setAttribute("data-theme", saved);
+  }
+  const toggle = () => {
+    const next =
+      document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    try {
+      localStorage.setItem("frost-theme", next);
+    } catch (_e) {
+      /* ignore — the toggle still works for this session */
+    }
+    updateThemeColor();
+  };
+  if (els.themeToggle) els.themeToggle.addEventListener("click", toggle);
+  if (els.themeToggleM) els.themeToggleM.addEventListener("click", toggle);
+  updateThemeColor();
+}
+
+// --- Frost particles (ambient snow drifting behind the glass) ---------------
+function initFrost() {
+  const canvas = els.frostCanvas;
+  if (!canvas || !canvas.getContext) return;
+  const reduce =
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) return; // honour the OS "reduce motion" setting — no particles at all
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let w = 0;
+  let h = 0;
+  let flakes = [];
+  const COUNT = 70;
+
+  function resize() {
+    w = window.innerWidth;
+    h = window.innerHeight;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function make() {
+    return {
+      x: Math.random() * w,
+      y: Math.random() * h,
+      r: Math.random() * 2.2 + 0.6,
+      vy: Math.random() * 0.5 + 0.15,
+      vx: (Math.random() - 0.5) * 0.35,
+      a: Math.random() * 0.5 + 0.25,
+      drift: Math.random() * Math.PI * 2,
+    };
+  }
+  function tick() {
+    ctx.clearRect(0, 0, w, h);
+    const dark = document.documentElement.getAttribute("data-theme") === "dark";
+    ctx.fillStyle = dark ? "#bcdcff" : "#7fb8ff";
+    for (const f of flakes) {
+      f.drift += 0.01;
+      f.y += f.vy;
+      f.x += f.vx + Math.sin(f.drift) * 0.25;
+      if (f.y > h + 5) {
+        f.y = -5;
+        f.x = Math.random() * w;
+      }
+      if (f.x > w + 5) f.x = -5;
+      else if (f.x < -5) f.x = w + 5;
+      ctx.globalAlpha = f.a;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    frostRaf = requestAnimationFrame(tick);
+  }
+
+  resize();
+  flakes = Array.from({ length: COUNT }, make);
+  window.addEventListener("resize", resize);
+  // Pause the loop while the tab is hidden, resume when it returns.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (frostRaf) cancelAnimationFrame(frostRaf);
+      frostRaf = null;
+    } else if (!frostRaf) {
+      frostRaf = requestAnimationFrame(tick);
+    }
+  });
+  frostRaf = requestAnimationFrame(tick);
+}
+
+// Keep the Cart nav badges (sidebar + bottom bar) in sync with the open-item count.
+function updateCartBadges(count) {
+  for (const badge of [els.navCartCount, els.tabbarCartCount]) {
+    if (!badge) continue;
+    badge.hidden = count <= 0;
+    badge.textContent = String(count);
+  }
+}
+
+// Wire every nav surface with delegated handlers (they all share [data-*] attributes).
+for (const item of els.destItems) {
+  item.addEventListener("click", () => activateDest(item.dataset.dest));
+}
+for (const item of els.subItems) {
+  item.addEventListener("click", () => applySub(item.dataset.destSub, item.dataset.sub));
+}
+for (const item of els.scanModeItems) {
+  item.addEventListener("click", () => setScanMode(item.dataset.mode));
+}
+if (els.menuBtn) els.menuBtn.addEventListener("click", openMoreSheet);
+if (els.sheetOverlay) els.sheetOverlay.addEventListener("click", closeMoreSheet);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMoreSheet();
+});
+
 els.refreshFridge.addEventListener("click", loadFridge);
 els.refreshHistory.addEventListener("click", loadHistory);
 els.refreshSuggestions.addEventListener("click", loadSuggestions);
 els.perishForm.addEventListener("submit", addPerishable);
 els.recipeSearchForm.addEventListener("submit", searchRecipes);
-els.fridgeScanCta.addEventListener("click", () => activateTab("upload"));
+els.fridgeScanCta.addEventListener("click", () => activateDest("scan"));
 els.fridgeToggle.addEventListener("click", () => setFridgeItemsOpen(!fridgeItemsOpen));
-els.planBuild.addEventListener("click", loadPlan);
+els.planBuild.addEventListener("click", () => loadPlan());
+if (els.planWeek) els.planWeek.addEventListener("click", () => loadPlan({ autopilot: true }));
+if (els.planShoppingAddall)
+  els.planShoppingAddall.addEventListener("click", addPlanShoppingToList);
 els.chefForm.addEventListener("submit", askChef);
+els.memDiet.addEventListener("change", () => saveMemory("diet", els.memDiet.value));
+els.memAllergyForm.addEventListener("submit", addMemoryFromForm);
+els.memDislikeForm.addEventListener("submit", addMemoryFromForm);
+els.memClear.addEventListener("click", clearMemory);
+els.shopForm.addEventListener("submit", addShoppingItem);
+els.shopClear.addEventListener("click", clearBoughtShopping);
+if (els.restockAddall) els.restockAddall.addEventListener("click", addAllRestock);
+if (els.receiptForm) {
+  els.receiptForm.addEventListener("submit", previewReceipt);
+  els.receiptClear.addEventListener("click", clearReceipt);
+  els.receiptImport.addEventListener("click", importReceipt);
+}
+els.briefingCheck.addEventListener("click", checkBriefingNow);
+els.briefingDismiss.addEventListener("click", dismissBriefing);
 els.nutriRefresh.addEventListener("click", refreshNutrition);
 els.barcodeForm.addEventListener("submit", lookupBarcode);
 els.barcodeScan.addEventListener("click", startBarcodeScan);
@@ -1223,6 +1514,19 @@ function buildRecipeCard(recipe) {
     card.appendChild(bar);
   }
 
+  // "Cook it" → opens Cook Mode (guided steps, timers, voice, swap ideas).
+  if (recipe.id) {
+    const actions = document.createElement("div");
+    actions.className = "recipe-card-actions";
+    const cookBtn = document.createElement("button");
+    cookBtn.type = "button";
+    cookBtn.className = "btn-cook";
+    cookBtn.textContent = "👨‍🍳 Cook it";
+    cookBtn.addEventListener("click", () => openCookMode(recipe.id));
+    actions.appendChild(cookBtn);
+    card.appendChild(actions);
+  }
+
   return card;
 }
 
@@ -1377,6 +1681,14 @@ function buildSearchRecipeCard(r) {
 
   const actions = document.createElement("div");
   actions.className = "search-card-actions";
+  if (r.id) {
+    const cookBtn = document.createElement("button");
+    cookBtn.type = "button";
+    cookBtn.className = "btn-cook";
+    cookBtn.textContent = "👨‍🍳 Cook it";
+    cookBtn.addEventListener("click", () => openCookMode(r.id));
+    actions.appendChild(cookBtn);
+  }
   const similarBtn = document.createElement("button");
   similarBtn.type = "button";
   similarBtn.className = "btn-similar";
@@ -1429,20 +1741,37 @@ function formatDate(ymd) {
 }
 
 // --- Meal Plan (zero-waste optimizer) ---------------------------------------
-async function loadPlan() {
-  const days = parseInt(els.planDays.value, 10) || 3;
-  const mealsPerDay = parseInt(els.planMeals.value, 10) || 2;
+// Remember the last plan so "Add all to my list" can post its shopping list.
+let lastPlanShopping = [];
+
+async function loadPlan(options) {
+  const opts = options || {};
+  // Autopilot week: a fixed 7-day, 3-meal horizon regardless of the controls.
+  const autopilot = opts.autopilot === true;
+  const days = autopilot ? 7 : parseInt(els.planDays.value, 10) || 3;
+  const mealsPerDay = autopilot ? 3 : parseInt(els.planMeals.value, 10) || 2;
+
+  // Reflect the horizon in the controls so the UI stays truthful in autopilot mode.
+  if (autopilot) {
+    if (els.planDays) els.planDays.value = "7";
+    if (els.planMeals) els.planMeals.value = "3";
+  }
+
+  const budget = parseBudgetInput();
+  const body = { days, meals_per_day: mealsPerDay };
+  if (budget != null) body.budget = budget;
 
   els.planError.hidden = true;
   els.planBody.hidden = true;
   els.planLoading.hidden = false;
-  els.planBuild.disabled = true;
+  if (els.planBuild) els.planBuild.disabled = true;
+  if (els.planWeek) els.planWeek.disabled = true;
 
   try {
     const response = await fetch("/api/plan", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ days, meals_per_day: mealsPerDay }),
+      body: JSON.stringify(body),
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
@@ -1457,8 +1786,29 @@ async function loadPlan() {
     els.planError.hidden = false;
   } finally {
     els.planLoading.hidden = true;
-    els.planBuild.disabled = false;
+    if (els.planBuild) els.planBuild.disabled = false;
+    if (els.planWeek) els.planWeek.disabled = false;
   }
+}
+
+// Read the optional budget cap. Blank / non-numeric → null (no cap); negative clamps to 0.
+function parseBudgetInput() {
+  if (!els.planBudget) return null;
+  const raw = String(els.planBudget.value || "").trim();
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, n);
+}
+
+// Format a money amount with the plan's currency symbol (defaults to ₹).
+function formatMoney(amount, currency) {
+  const sym = currency || "₹";
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return "";
+  // Whole numbers read cleaner without trailing ".0"; keep cents otherwise.
+  const body = Number.isInteger(n) ? String(n) : n.toFixed(2);
+  return `${sym}${body}`;
 }
 
 function renderPlan(data) {
@@ -1467,6 +1817,12 @@ function renderPlan(data) {
   const notes = Array.isArray(data.notes) ? data.notes : [];
   const shopping = Array.isArray(data.shopping_list) ? data.shopping_list : [];
   const atRisk = Array.isArray(data.at_risk_remaining) ? data.at_risk_remaining : [];
+  const byDay = Array.isArray(data.by_day) ? data.by_day : [];
+  const currency = metrics.currency || "₹";
+  const priced = Number.isFinite(metrics.shopping_cost);
+
+  // Keep the budget field's currency hint in step with the server's currency.
+  if (els.planBudgetCur) els.planBudgetCur.textContent = `(${currency}, optional)`;
 
   // --- Metric tiles ---
   els.planMetrics.innerHTML = "";
@@ -1498,6 +1854,32 @@ function renderPlan(data) {
     );
   }
 
+  // --- Cost tiles (only when the plan is priced) ---
+  if (priced) {
+    // Shopping cost — highlighted green within budget, amber when over.
+    let costClass = "plan-stat-cost";
+    let costLabel = "Est. shopping cost";
+    if (Number.isFinite(metrics.budget)) {
+      const within = metrics.within_budget !== false;
+      costClass += within ? " plan-stat-ok" : " plan-stat-over";
+      costLabel = within
+        ? `Within ${formatMoney(metrics.budget, currency)} budget`
+        : `Over ${formatMoney(metrics.budget, currency)} budget`;
+    }
+    els.planMetrics.appendChild(
+      buildStat(formatMoney(metrics.shopping_cost, currency), costLabel, costClass)
+    );
+    if (Number.isFinite(metrics.pantry_value_used) && metrics.pantry_value_used > 0) {
+      els.planMetrics.appendChild(
+        buildStat(
+          formatMoney(metrics.pantry_value_used, currency),
+          "Pantry value used",
+          "plan-stat-pantry"
+        )
+      );
+    }
+  }
+
   // --- Notes ---
   els.planNotes.innerHTML = "";
   for (const note of notes) {
@@ -1507,19 +1889,35 @@ function renderPlan(data) {
     els.planNotes.appendChild(p);
   }
 
+  // --- Day-by-day breakdown (Autopilot week) ---
+  els.planByday.innerHTML = "";
+  const showByDay = byDay.length > 1;
+  els.planBydaySection.hidden = !showByDay;
+  if (showByDay) {
+    for (const day of byDay) {
+      els.planByday.appendChild(buildPlanDayCard(day, currency));
+    }
+  }
+
   // --- Meal cards / empty state ---
   els.planMealsList.innerHTML = "";
   els.planEmpty.hidden = plan.length > 0;
   for (const meal of plan) {
-    els.planMealsList.appendChild(buildPlanMealCard(meal));
+    els.planMealsList.appendChild(buildPlanMealCard(meal, currency));
   }
 
   // --- Shopping list ---
+  lastPlanShopping = shopping;
   els.planShopping.innerHTML = "";
   els.planShoppingSection.hidden = shopping.length === 0;
   els.planShoppingCount.textContent = String(shopping.length);
+  if (els.planShoppingAdded) els.planShoppingAdded.hidden = true;
+  if (els.planShoppingAddall) {
+    els.planShoppingAddall.disabled = false;
+    els.planShoppingAddall.textContent = "Add all to my list";
+  }
   for (const s of shopping) {
-    els.planShopping.appendChild(buildPlanShoppingRow(s));
+    els.planShopping.appendChild(buildPlanShoppingRow(s, currency));
   }
 
   // --- Still at risk ---
@@ -1560,7 +1958,7 @@ function buildStat(value, label, extraClass) {
   return stat;
 }
 
-function buildPlanMealCard(meal) {
+function buildPlanMealCard(meal, currency) {
   const card = document.createElement("div");
   card.className = "card plan-meal-card";
 
@@ -1571,12 +1969,22 @@ function buildPlanMealCard(meal) {
   const slot = Number.isFinite(meal.slot) ? meal.slot : "";
   title.textContent = slot ? `Meal ${slot}: ${meal.title || "Recipe"}` : (meal.title || "Recipe");
   head.appendChild(title);
+  const meta = document.createElement("div");
+  meta.className = "card-head-meta";
   if (Number.isFinite(meal.time_min)) {
     const time = document.createElement("span");
     time.className = "recipe-time muted small";
     time.textContent = `⏱ ${meal.time_min} min`;
-    head.appendChild(time);
+    meta.appendChild(time);
   }
+  // Per-meal top-up cost (0 when everything is already on hand).
+  if (Number.isFinite(meal.est_cost)) {
+    const cost = document.createElement("span");
+    cost.className = meal.est_cost > 0 ? "meal-cost" : "meal-cost meal-cost-free";
+    cost.textContent = meal.est_cost > 0 ? `+${formatMoney(meal.est_cost, currency)}` : "on hand";
+    meta.appendChild(cost);
+  }
+  if (meta.childElementCount) head.appendChild(meta);
   card.appendChild(head);
 
   // "Uses your …expiring" highlight — the zero-waste payoff, shown first.
@@ -1670,7 +2078,7 @@ async function cookMeal(meal, button, status) {
   }
 }
 
-function buildPlanShoppingRow(s) {
+function buildPlanShoppingRow(s, currency) {
   const row = document.createElement("div");
   row.className = "shopping-row";
 
@@ -1684,7 +2092,115 @@ function buildPlanShoppingRow(s) {
   forRecipes.textContent = titles.length ? `for ${titles.join(", ")}` : "";
 
   row.append(item, forRecipes);
+
+  // Priced plans show the per-item estimate on the right.
+  if (Number.isFinite(s.est_cost)) {
+    const price = document.createElement("span");
+    price.className = "shopping-price";
+    price.textContent = formatMoney(s.est_cost, currency);
+    row.appendChild(price);
+  }
   return row;
+}
+
+// One day's card in the Autopilot week breakdown: its meals + the day's top-up cost.
+function buildPlanDayCard(day, currency) {
+  const card = document.createElement("div");
+  card.className = "card plan-day-card";
+
+  const head = document.createElement("div");
+  head.className = "plan-day-head";
+  const label = document.createElement("h4");
+  label.className = "plan-day-label";
+  label.textContent = `Day ${day.day}`;
+  head.appendChild(label);
+  if (Number.isFinite(day.est_cost)) {
+    const cost = document.createElement("span");
+    cost.className = day.est_cost > 0 ? "plan-day-cost" : "plan-day-cost meal-cost-free";
+    cost.textContent = day.est_cost > 0 ? `+${formatMoney(day.est_cost, currency)}` : "on hand";
+    head.appendChild(cost);
+  }
+  card.appendChild(head);
+
+  const meals = Array.isArray(day.meals) ? day.meals : [];
+  const list = document.createElement("ul");
+  list.className = "plan-day-meals";
+  for (const meal of meals) {
+    const li = document.createElement("li");
+    li.className = "plan-day-meal";
+    const name = document.createElement("span");
+    name.className = "plan-day-meal-name";
+    name.textContent = meal.title || "Recipe";
+    li.appendChild(name);
+    if (Number.isFinite(meal.est_cost) && meal.est_cost > 0) {
+      const mc = document.createElement("span");
+      mc.className = "plan-day-meal-cost muted small";
+      mc.textContent = `+${formatMoney(meal.est_cost, currency)}`;
+      li.appendChild(mc);
+    }
+    list.appendChild(li);
+  }
+  card.appendChild(list);
+  return card;
+}
+
+// "Add all to my list" — post every planned shopping item to the shared list in one call.
+async function addPlanShoppingToList() {
+  const items = (lastPlanShopping || [])
+    .map((s) => (s && s.item ? String(s.item).trim() : ""))
+    .filter(Boolean);
+  if (!items.length) return;
+
+  const btn = els.planShoppingAddall;
+  const note = els.planShoppingAdded;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Adding…";
+  }
+  if (note) note.hidden = true;
+
+  try {
+    const response = await fetch("/api/shopping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items.map((name) => ({ name })) }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (note) {
+        note.hidden = false;
+        note.classList.add("cook-error");
+        note.textContent = (payload && payload.error) || "Couldn't add those items.";
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Add all to my list";
+      }
+      return;
+    }
+    const added = Array.isArray(payload && payload.added) ? payload.added.length : items.length;
+    const skipped = Number.isFinite(payload && payload.skipped) ? payload.skipped : 0;
+    if (btn) btn.textContent = "✓ Added";
+    if (note) {
+      note.hidden = false;
+      note.classList.remove("cook-error");
+      note.textContent = skipped
+        ? `Added ${added} item${added === 1 ? "" : "s"} · ${skipped} already on your list.`
+        : `Added ${added} item${added === 1 ? "" : "s"} to your shopping list.`;
+    }
+    // Keep the Cart tab's list in sync with the server.
+    loadShopping();
+  } catch (_err) {
+    if (note) {
+      note.hidden = false;
+      note.classList.add("cook-error");
+      note.textContent = "Couldn't reach the server.";
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Add all to my list";
+    }
+  }
 }
 
 // --- Nutrition (Open Food Facts dashboard + barcode scanner) ----------------
@@ -2239,6 +2755,40 @@ function formatWeekLabel(ymd) {
 }
 
 // --- Chef (tool-using agent) ------------------------------------------------
+// Chef works in a loop: look things up with tools, decide, act. Reversible things
+// (remembering a preference, adding to the shopping list) it just does; anything that
+// changes the fridge comes back as an action card that waits for the user's Confirm.
+
+const ACTION_ICONS = {
+  cook_meal: "🍳",
+  discard_items: "🗑️",
+  track_expiry: "📅",
+  add_shopping: "🛒",
+};
+
+const ACTION_STATUS_TEXT = {
+  pending: "Waiting for your OK",
+  running: "Working…",
+  done: "✓ Done",
+  cancelled: "Cancelled",
+  expired: "Out of date — ask Chef again",
+  failed: "Didn't work",
+};
+
+// Action ids already shown as cards in the chat, so "Waiting for your OK" doesn't repeat them.
+const inlineActionIds = new Set();
+// Chat suggestions still waiting for an OK (from the server), for the "Waiting" box.
+let waitingActions = [];
+
+function newRunId() {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `run-${Date.now().toString(36)}-${rand}`;
+}
+
+function isLive() {
+  return Boolean(liveSocket && liveSocket.connected);
+}
+
 async function askChef(event) {
   event.preventDefault();
   const message = els.chefInput.value.trim();
@@ -2254,33 +2804,46 @@ async function askChef(event) {
   els.chefInput.disabled = true;
 
   const pending = appendChefPending();
-  const historyToSend = chefHistory.slice();
+  const body = { message, history: chefHistory.slice() };
+  // Over a live connection, the server streams Chef's steps to this tab while it works.
+  if (isLive() && liveSocket.id) {
+    body.run_id = newRunId();
+    body.sid = liveSocket.id;
+    activeChefRun = { id: body.run_id, bubble: pending, open: {} };
+  }
 
   try {
     const response = await fetch("/api/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history: historyToSend }),
+      body: JSON.stringify(body),
     });
     const payload = await response.json().catch(() => null);
+    activeChefRun = null;
     pending.remove();
 
     if (!response.ok) {
       const msg = (payload && payload.error) || `The Chef returned an error (HTTP ${response.status}).`;
-      // 503 = not configured on the server; show it inline rather than as a hard failure.
       els.chefError.textContent = msg;
       els.chefError.hidden = false;
       return;
     }
 
     const answer = (payload && payload.answer) || "(no answer)";
-    appendChefBubble("assistant", answer, payload && payload.steps, payload && payload.model);
+    appendChefBubble("assistant", answer, payload);
+    setChefMode(payload && payload.mode);
+
+    // Without a live connection nobody tells this tab what Chef changed — refresh by hand.
+    if (!isLive() && payload) {
+      refreshScopes([...(payload.changed || []), "agent"]);
+    }
 
     // Keep a bounded running transcript for follow-up context.
     chefHistory.push({ role: "user", content: message });
     chefHistory.push({ role: "assistant", content: answer });
     while (chefHistory.length > 10) chefHistory.shift();
   } catch (_err) {
+    activeChefRun = null;
     pending.remove();
     els.chefError.textContent = "Couldn't reach the server to ask the Chef.";
     els.chefError.hidden = false;
@@ -2289,33 +2852,74 @@ async function askChef(event) {
     els.chefSend.disabled = false;
     els.chefInput.disabled = false;
     els.chefInput.focus();
+    renderWaiting();
   }
 }
 
-function appendChefBubble(role, text, steps, model) {
+// Chat models like **bold**; show it as bold instead of raw asterisks. Built from text nodes
+// (never innerHTML), so nothing the model writes can inject markup.
+function appendRichText(el, text) {
+  for (const part of String(text || "").split(/(\*\*[^*\n]+\*\*)/)) {
+    if (!part) continue;
+    if (/^\*\*[^*\n]+\*\*$/.test(part)) {
+      const strong = document.createElement("strong");
+      strong.textContent = part.slice(2, -2);
+      el.appendChild(strong);
+    } else {
+      el.appendChild(document.createTextNode(part));
+    }
+  }
+}
+
+function appendChefBubble(role, text, payload) {
   const bubble = document.createElement("div");
   bubble.className = `chef-msg chef-msg-${role}`;
 
+  // Chef says so when it had to fall back to its simpler, rules-based brain.
+  if (role === "assistant" && payload && payload.note) {
+    const note = document.createElement("p");
+    note.className = "chef-note small";
+    note.textContent = `⚠️ ${payload.note}`;
+    bubble.appendChild(note);
+  }
+
   const body = document.createElement("p");
   body.className = "chef-msg-text";
-  body.textContent = text;
+  if (role === "assistant") appendRichText(body, text);
+  else body.textContent = text;
   bubble.appendChild(body);
 
-  // For the assistant, expose which tools it called (transparency), collapsed by default.
-  if (role === "assistant" && Array.isArray(steps) && steps.length) {
-    const details = document.createElement("details");
-    details.className = "chef-steps";
-    const summary = document.createElement("summary");
-    const toolNames = steps.map((s) => s.tool).filter(Boolean);
-    summary.textContent = `Used ${toolNames.length} tool${toolNames.length === 1 ? "" : "s"}${model ? " · " + model : ""}`;
-    details.appendChild(summary);
-    for (const step of steps) {
-      const line = document.createElement("div");
-      line.className = "chef-step muted small";
-      line.textContent = `${step.tool}(${step.arguments ? JSON.stringify(step.arguments) : ""})`;
-      details.appendChild(line);
+  if (role === "assistant" && payload) {
+    // Anything that would change the fridge waits here for the user's OK.
+    const actions = Array.isArray(payload.actions) ? payload.actions : [];
+    if (actions.length) {
+      const list = document.createElement("div");
+      list.className = "action-list chef-actions";
+      for (const action of actions) {
+        inlineActionIds.add(action.id);
+        list.appendChild(renderActionCard(action));
+      }
+      bubble.appendChild(list);
     }
-    bubble.appendChild(details);
+
+    // Which tools it used (transparency), collapsed by default.
+    const steps = Array.isArray(payload.steps) ? payload.steps : [];
+    if (steps.length) {
+      const details = document.createElement("details");
+      details.className = "chef-steps";
+      const summary = document.createElement("summary");
+      const via = payload.mode === "offline" ? "simple mode" : payload.model;
+      summary.textContent = `How Chef worked it out · ${steps.length} step${steps.length === 1 ? "" : "s"}${via ? " · " + via : ""}`;
+      details.appendChild(summary);
+      for (const step of steps) {
+        const failed = step.result && typeof step.result === "object" && step.result.error;
+        const line = document.createElement("div");
+        line.className = "chef-step muted small";
+        line.textContent = `${failed ? "⚠" : "✓"} ${step.tool}(${step.arguments ? JSON.stringify(step.arguments) : ""})`;
+        details.appendChild(line);
+      }
+      bubble.appendChild(details);
+    }
   }
 
   els.chefLog.appendChild(bubble);
@@ -2326,15 +2930,933 @@ function appendChefBubble(role, text, steps, model) {
 function appendChefPending() {
   const bubble = document.createElement("div");
   bubble.className = "chef-msg chef-msg-assistant chef-msg-pending";
+  const head = document.createElement("div");
+  head.className = "chef-pending-head";
   const spinner = document.createElement("span");
   spinner.className = "spinner";
   spinner.setAttribute("aria-hidden", "true");
   const label = document.createElement("span");
+  label.className = "chef-pending-label";
   label.textContent = "The Chef is thinking…";
-  bubble.append(spinner, label);
+  head.append(spinner, label);
+  // Filled live from "agent_step" events: one line per tool Chef runs.
+  const steps = document.createElement("ul");
+  steps.className = "chef-live-steps";
+  steps.hidden = true;
+  bubble.append(head, steps);
   els.chefLog.appendChild(bubble);
   els.chefLog.scrollTop = els.chefLog.scrollHeight;
   return bubble;
+}
+
+// One live progress event from the server while Chef works on this tab's question.
+function handleAgentStep(event) {
+  const run = activeChefRun;
+  if (!run || !event || event.run_id !== run.id) return;
+  const label = run.bubble.querySelector(".chef-pending-label");
+
+  if (event.phase === "thinking") {
+    if (!label) return;
+    if (event.round === "final") label.textContent = "Writing the answer…";
+    else if (event.round > 1) label.textContent = "Thinking about what it found…";
+    else label.textContent = "Reading your question…";
+    return;
+  }
+  if (event.phase !== "tool") return;
+
+  const list = run.bubble.querySelector(".chef-live-steps");
+  if (!list) return;
+  const text = event.label || event.tool || "Working";
+  if (event.status === "running") {
+    const item = document.createElement("li");
+    item.className = "chef-live-step";
+    item.dataset.state = "running";
+    item.textContent = `${text}…`;
+    list.appendChild(item);
+    list.hidden = false;
+    run.open[event.tool] = item;
+    if (label) label.textContent = "Working on it…";
+  } else {
+    const item = run.open[event.tool] || list.appendChild(document.createElement("li"));
+    delete run.open[event.tool];
+    item.className = "chef-live-step";
+    item.dataset.state = event.status === "error" ? "error" : "done";
+    item.textContent = text;
+    list.hidden = false;
+  }
+  els.chefLog.scrollTop = els.chefLog.scrollHeight;
+}
+
+function setChefMode(mode) {
+  if (!els.chefMode || !mode) return;
+  const offline = mode === "offline";
+  els.chefMode.hidden = false;
+  els.chefMode.dataset.mode = offline ? "offline" : "ai";
+  els.chefMode.textContent = offline ? "Simple mode" : "AI mode";
+  els.chefMode.title = offline
+    ? "No AI model is reachable, so Chef is using built-in rules — still with your real fridge data."
+    : "Chef is using an AI model with your real fridge data.";
+}
+
+// --- Chef's suggested changes (confirm-before-change) -------------------------
+function actionIcon(action) {
+  if (action.tool === "resolve_perishable") {
+    return action.arguments && action.arguments.event === "wasted" ? "🗑️" : "✅";
+  }
+  return ACTION_ICONS[action.tool] || "🧑‍🍳";
+}
+
+function renderActionCard(action) {
+  const card = document.createElement("div");
+  card.className = "action-card";
+  card.dataset.actionId = String(action.id);
+
+  const icon = document.createElement("span");
+  icon.className = "action-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = actionIcon(action);
+
+  const main = document.createElement("div");
+  main.className = "action-main";
+  const summary = document.createElement("p");
+  summary.className = "action-summary";
+  summary.textContent = action.summary || action.tool;
+  const status = document.createElement("p");
+  status.className = "action-status small";
+  main.append(summary, status);
+
+  const buttons = document.createElement("div");
+  buttons.className = "action-buttons";
+  const confirmBtn = document.createElement("button");
+  confirmBtn.type = "button";
+  confirmBtn.className = "btn btn-primary btn-sm";
+  confirmBtn.textContent = "Confirm";
+  confirmBtn.addEventListener("click", () => confirmAction(action.id));
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "btn btn-ghost btn-sm";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", () => cancelAction(action.id));
+  buttons.append(confirmBtn, cancelBtn);
+
+  card.append(icon, main, buttons);
+  applyActionStatus(card, action.status || "pending", actionError(action));
+  return card;
+}
+
+function actionError(action) {
+  const result = action && action.result;
+  return action && action.status === "failed" && result && result.error ? String(result.error) : "";
+}
+
+function applyActionStatus(card, status, detail) {
+  card.dataset.status = status;
+  const text = card.querySelector(".action-status");
+  if (text) {
+    const base = ACTION_STATUS_TEXT[status] || status;
+    text.textContent = detail ? (status === "failed" ? `${base}: ${detail}` : detail) : base;
+  }
+  const buttons = card.querySelector(".action-buttons");
+  if (buttons) {
+    buttons.hidden = status !== "pending";
+    for (const btn of buttons.querySelectorAll("button")) btn.disabled = status !== "pending";
+  }
+}
+
+// The same suggestion can be on screen twice (chat + waiting box) — update every copy.
+function setActionStatus(id, status, detail) {
+  for (const card of document.querySelectorAll(`[data-action-id="${Number(id)}"]`)) {
+    applyActionStatus(card, status, detail);
+  }
+}
+
+async function confirmAction(id) {
+  setActionStatus(id, "running");
+  try {
+    const response = await fetch(`/api/agent/actions/${Number(id)}/confirm`, { method: "POST" });
+    const payload = await response.json().catch(() => null);
+    if (response.ok) {
+      setActionStatus(id, "done");
+      if (!isLive()) refreshScopes(["inventory", "perishables", "analytics", "shopping", "agent", "briefing"]);
+      return;
+    }
+    const msg = (payload && payload.error) || `Couldn't do that (HTTP ${response.status}).`;
+    if (response.status === 409) {
+      // Already handled elsewhere (another tab / double click) or out of date.
+      const current = payload && payload.action;
+      if (current && current.status) setActionStatus(id, current.status, actionError(current));
+      else setActionStatus(id, "expired", msg);
+    } else {
+      setActionStatus(id, "failed", msg);
+    }
+  } catch (_err) {
+    setActionStatus(id, "pending", "Couldn't reach the server — try again.");
+  }
+}
+
+async function cancelAction(id) {
+  setActionStatus(id, "running", "Cancelling…");
+  try {
+    const response = await fetch(`/api/agent/actions/${Number(id)}/cancel`, { method: "POST" });
+    if (response.ok) {
+      setActionStatus(id, "cancelled");
+      if (!isLive()) syncActions();
+      return;
+    }
+    const payload = await response.json().catch(() => null);
+    setActionStatus(id, "pending", (payload && payload.error) || "Couldn't cancel that.");
+    syncActions(); // it may have been handled elsewhere — show its real state
+  } catch (_err) {
+    setActionStatus(id, "pending", "Couldn't reach the server — try again.");
+  }
+}
+
+// Re-read Chef's recent suggestions: refresh every card's status and the "Waiting" box.
+async function syncActions() {
+  let actions;
+  try {
+    const response = await fetch("/api/agent/actions?status=all");
+    if (!response.ok) return;
+    const payload = await response.json();
+    actions = Array.isArray(payload.actions) ? payload.actions : [];
+  } catch (_err) {
+    return;
+  }
+  for (const action of actions) {
+    for (const card of document.querySelectorAll(`[data-action-id="${Number(action.id)}"]`)) {
+      // Don't flip a card back to "pending" while this tab's own click is in flight.
+      if (card.dataset.status === "running" && action.status === "pending") continue;
+      applyActionStatus(card, action.status, actionError(action));
+    }
+  }
+  waitingActions = actions.filter((a) => a.status === "pending" && a.source !== "briefing");
+  renderWaiting();
+}
+
+function renderWaiting() {
+  if (!els.chefWaiting || chefBusy) return; // an answer in flight will show its own cards
+  const list = waitingActions.filter((a) => !inlineActionIds.has(a.id));
+  els.chefWaitingList.innerHTML = "";
+  for (const action of list) els.chefWaitingList.appendChild(renderActionCard(action));
+  els.chefWaiting.hidden = list.length === 0;
+}
+
+// --- Chef's memory (household preferences) ------------------------------------
+const MEMORY_LABELS = {
+  household_size: "Household size",
+  favorite_cuisines: "Favourite cuisines",
+  notes: "Notes",
+  spice_level: "Spice level",
+  goal: "Goal",
+};
+let memoryDiets = [];
+let memClearArmed = null;
+
+async function loadMemory() {
+  try {
+    const response = await fetch("/api/agent/memory");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showMemError((payload && payload.error) || "Couldn't load your preferences.");
+      return;
+    }
+    renderMemory(payload);
+  } catch (_err) {
+    showMemError("Couldn't reach the server to load your preferences.");
+  }
+}
+
+function renderMemory(payload) {
+  const memory = (payload && payload.memory) || {};
+  if (payload && Array.isArray(payload.diets)) memoryDiets = payload.diets;
+
+  els.memDiet.innerHTML = "";
+  const choices = [["", "Not set"], ...memoryDiets.map((d) => [d, d.charAt(0).toUpperCase() + d.slice(1)])];
+  for (const [value, text] of choices) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    els.memDiet.appendChild(option);
+  }
+  els.memDiet.value = typeof memory.diet === "string" ? memory.diet : "";
+
+  renderChips(els.memAllergies, "allergies", memory.allergies);
+  renderChips(els.memDislikes, "dislikes", memory.dislikes);
+
+  // Anything else Chef picked up in conversation (household size, spice level, ...).
+  els.memOther.innerHTML = "";
+  for (const [key, value] of Object.entries(memory)) {
+    if (key === "diet" || key === "allergies" || key === "dislikes") continue;
+    const row = document.createElement("div");
+    row.className = "mem-other-row";
+    const name = document.createElement("span");
+    name.className = "mem-label";
+    name.textContent = MEMORY_LABELS[key] || key;
+    const val = document.createElement("span");
+    val.className = "mem-value";
+    val.textContent = Array.isArray(value) ? value.join(", ") : String(value);
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "chip-x";
+    forget.textContent = "×";
+    forget.setAttribute("aria-label", `Forget ${MEMORY_LABELS[key] || key}`);
+    forget.addEventListener("click", () => forgetMemory(key));
+    row.append(name, val, forget);
+    els.memOther.appendChild(row);
+  }
+
+  els.memClear.hidden = Object.keys(memory).length === 0;
+  disarmMemClear();
+  hideMemError();
+}
+
+function renderChips(container, key, values) {
+  container.innerHTML = "";
+  const list = Array.isArray(values) ? values : [];
+  if (!list.length) {
+    const none = document.createElement("span");
+    none.className = "muted small";
+    none.textContent = "None yet";
+    container.appendChild(none);
+    return;
+  }
+  for (const value of list) {
+    const chip = document.createElement("span");
+    chip.className = key === "allergies" ? "chip chip-allergy" : "chip";
+    const text = document.createElement("span");
+    text.textContent = value;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "chip-x";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${value}`);
+    remove.addEventListener("click", () => forgetMemory(key, value));
+    chip.append(text, remove);
+    container.appendChild(chip);
+  }
+}
+
+function saveMemory(key, value) {
+  if (key === "diet" && !value) return forgetMemory("diet");
+  return memoryRequest(
+    fetch("/api/agent/memory", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    })
+  );
+}
+
+function forgetMemory(key, value) {
+  const params = new URLSearchParams();
+  if (key) params.set("key", key);
+  if (key && value !== undefined) params.set("value", value);
+  const query = params.toString();
+  return memoryRequest(fetch(`/api/agent/memory${query ? "?" + query : ""}`, { method: "DELETE" }));
+}
+
+async function memoryRequest(request) {
+  hideMemError();
+  try {
+    const response = await request;
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showMemError((payload && payload.error) || "Couldn't update your preferences.");
+      loadMemory(); // e.g. put the diet dropdown back to what's actually saved
+      return false;
+    }
+    if (payload && payload.memory) renderMemory({ memory: payload.memory });
+    else loadMemory();
+    return true;
+  } catch (_err) {
+    showMemError("Couldn't reach the server to update your preferences.");
+    return false;
+  }
+}
+
+async function addMemoryFromForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const input = form.querySelector("input");
+  const value = input.value.trim();
+  if (!value) return;
+  if (await saveMemory(form.dataset.key, value)) input.value = "";
+}
+
+// "Forget all" asks twice (no blocking dialog): the first tap arms it for a few seconds.
+function clearMemory() {
+  if (!memClearArmed) {
+    els.memClear.textContent = "Tap again to forget all";
+    els.memClear.classList.add("armed");
+    memClearArmed = setTimeout(disarmMemClear, 4000);
+    return;
+  }
+  disarmMemClear();
+  forgetMemory();
+}
+
+function disarmMemClear() {
+  if (memClearArmed) clearTimeout(memClearArmed);
+  memClearArmed = null;
+  els.memClear.textContent = "Forget all";
+  els.memClear.classList.remove("armed");
+}
+
+function showMemError(message) {
+  els.memError.textContent = message;
+  els.memError.hidden = false;
+}
+
+function hideMemError() {
+  els.memError.hidden = true;
+  els.memError.textContent = "";
+}
+
+// --- Shopping list --------------------------------------------------------------
+async function loadShopping() {
+  try {
+    const response = await fetch("/api/shopping");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showShopMsg((payload && payload.error) || "Couldn't load your shopping list.", true);
+      return;
+    }
+    renderShopping((payload && payload.items) || []);
+  } catch (_err) {
+    showShopMsg("Couldn't reach the server to load your shopping list.", true);
+  }
+}
+
+function renderShopping(items) {
+  els.shopList.innerHTML = "";
+  for (const item of items) {
+    const row = document.createElement("li");
+    row.className = item.done ? "shop-item done" : "shop-item";
+
+    const label = document.createElement("label");
+    label.className = "shop-check";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = Boolean(item.done);
+    box.addEventListener("change", () => toggleShopping(item.id, box.checked));
+    const text = document.createElement("span");
+    text.className = "shop-text";
+    const name = document.createElement("span");
+    name.className = "shop-name";
+    name.textContent = item.qty ? `${item.name} (${item.qty})` : item.name;
+    text.appendChild(name);
+    if (item.reason) {
+      const why = document.createElement("span");
+      why.className = "shop-reason muted small";
+      why.textContent = item.reason;
+      text.appendChild(why);
+    }
+    label.append(box, text);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "chip-x";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${item.name}`);
+    remove.addEventListener("click", () => deleteShopping(item.id));
+
+    row.append(label, remove);
+    els.shopList.appendChild(row);
+  }
+  const open = items.filter((i) => !i.done).length;
+  els.shopEmpty.hidden = items.length > 0;
+  els.shopCount.hidden = open === 0;
+  els.shopCount.textContent = String(open);
+  els.shopClear.hidden = !items.some((i) => i.done);
+  updateCartBadges(open); // keep the sidebar + bottom-bar Cart badges in sync
+}
+
+async function addShoppingItem(event) {
+  event.preventDefault();
+  const name = els.shopInput.value.trim();
+  if (!name) return;
+  try {
+    const response = await fetch("/api/shopping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showShopMsg((payload && payload.error) || "Couldn't add that.", true);
+      return;
+    }
+    els.shopInput.value = "";
+    const refused = (payload && payload.refused_for_allergy) || [];
+    if (refused.length) showShopMsg(`Not added — household allergy: ${refused.join(", ")}.`, true);
+    else if (payload && !(payload.added || []).length) showShopMsg(`${name} is already on the list.`);
+    else els.shopMsg.hidden = true;
+    loadShopping();
+  } catch (_err) {
+    showShopMsg("Couldn't reach the server to update your list.", true);
+  }
+}
+
+async function toggleShopping(id, done) {
+  await shoppingRequest(
+    fetch(`/api/shopping/${Number(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ done }),
+    })
+  );
+}
+
+async function deleteShopping(id) {
+  await shoppingRequest(fetch(`/api/shopping/${Number(id)}`, { method: "DELETE" }));
+}
+
+async function clearBoughtShopping() {
+  await shoppingRequest(fetch("/api/shopping?done=1", { method: "DELETE" }));
+}
+
+async function shoppingRequest(request) {
+  try {
+    const response = await request;
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      showShopMsg((payload && payload.error) || "Couldn't update your list.", true);
+    } else {
+      els.shopMsg.hidden = true;
+    }
+  } catch (_err) {
+    showShopMsg("Couldn't reach the server to update your list.", true);
+  }
+  loadShopping(); // always re-read: the list on screen should match the server
+}
+
+function showShopMsg(message, isError) {
+  els.shopMsg.textContent = message;
+  els.shopMsg.classList.toggle("inline-error", Boolean(isError));
+  els.shopMsg.hidden = false;
+}
+
+// --- Smart restock (Cart tab) ---------------------------------------------------
+// Predicts which staples are running low from real usage history (the waste log) and lets
+// the user drop them straight onto the shopping list below.
+let lastRestockItems = [];
+
+async function loadRestock() {
+  if (!els.restockCard) return;
+  try {
+    const response = await fetch("/api/restock");
+    if (!response.ok) {
+      els.restockCard.hidden = true; // the card is a bonus — hide quietly if it can't load
+      return;
+    }
+    const payload = await response.json().catch(() => null);
+    renderRestock(payload || {});
+  } catch (_err) {
+    els.restockCard.hidden = true;
+  }
+}
+
+function renderRestock(data) {
+  const items = Array.isArray(data.items) ? data.items : [];
+  const currency = data.currency || "₹";
+  lastRestockItems = items;
+
+  // Nothing worth nudging and no history yet → keep the card out of the way entirely,
+  // and clear any leftover rows so a re-open doesn't flash a stale "running low" list.
+  if (!items.length) {
+    els.restockCard.hidden = true;
+    els.restockAdded.hidden = true;
+    els.restockList.innerHTML = "";
+    els.restockCount.hidden = true;
+    els.restockCount.textContent = "";
+    els.restockAddall.hidden = true;
+    els.restockHeadline.textContent = "";
+    return;
+  }
+  els.restockCard.hidden = false;
+  els.restockAdded.hidden = true;
+
+  els.restockHeadline.textContent = data.headline || "";
+  els.restockCount.hidden = false;
+  els.restockCount.textContent = String(items.length);
+  els.restockAddall.hidden = items.length < 2;
+
+  els.restockList.innerHTML = "";
+  for (const item of items) {
+    els.restockList.appendChild(buildRestockRow(item, currency));
+  }
+}
+
+function buildRestockRow(item, currency) {
+  const row = document.createElement("div");
+  row.className = "restock-row";
+
+  const main = document.createElement("div");
+  main.className = "restock-main";
+
+  const head = document.createElement("div");
+  head.className = "restock-head";
+  const name = document.createElement("span");
+  name.className = "restock-name";
+  name.textContent = item.name || item.token || "";
+  const badge = document.createElement("span");
+  const status = item.status === "out" ? "out" : "low";
+  badge.className = `restock-badge restock-${status}`;
+  badge.textContent = status === "out" ? "Out" : "Low";
+  head.append(name, badge);
+
+  const reason = document.createElement("p");
+  reason.className = "restock-reason muted small";
+  reason.textContent = item.reason || "";
+  main.append(head, reason);
+
+  const side = document.createElement("div");
+  side.className = "restock-side";
+  const price = Number(item.est_cost);
+  if (Number.isFinite(price) && price > 0) {
+    const cost = document.createElement("span");
+    cost.className = "restock-cost";
+    cost.textContent = `~${formatMoney(price, currency)}`;
+    side.appendChild(cost);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "btn btn-secondary btn-sm restock-add";
+  add.textContent = "Add";
+  add.setAttribute("aria-label", `Add ${item.name} to shopping list`);
+  add.addEventListener("click", () => addRestockToList([item.name], add));
+  side.appendChild(add);
+
+  row.append(main, side);
+  return row;
+}
+
+// POST one or more restock suggestions onto the shopping list, then refresh both the list
+// and the nudge (the added items drop off it). Mirrors addPlanShoppingToList.
+async function addRestockToList(names, triggerBtn) {
+  const items = (names || []).filter(Boolean).map((name) => ({ name }));
+  if (!items.length) return;
+  if (triggerBtn) triggerBtn.disabled = true;
+  try {
+    const response = await fetch("/api/shopping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showRestockAdded((payload && payload.error) || "Couldn't add that to your list.", true);
+      return;
+    }
+    const added = (payload && payload.added) || [];
+    const refused = (payload && payload.refused_for_allergy) || [];
+    if (refused.length) {
+      showRestockAdded(`Not added — household allergy: ${refused.join(", ")}.`, true);
+    } else if (!added.length) {
+      showRestockAdded("Already on your list.");
+    } else {
+      const label = added.length === 1 ? added[0] : `${added.length} items`;
+      showRestockAdded(`Added ${label} to your shopping list.`);
+    }
+    loadShopping();
+    loadRestock();
+  } catch (_err) {
+    showRestockAdded("Couldn't reach the server to update your list.", true);
+  } finally {
+    if (triggerBtn) triggerBtn.disabled = false;
+  }
+}
+
+function addAllRestock() {
+  addRestockToList(lastRestockItems.map((i) => i.name), els.restockAddall);
+}
+
+function showRestockAdded(message, isError) {
+  els.restockAdded.textContent = message;
+  els.restockAdded.classList.toggle("cook-error", Boolean(isError));
+  els.restockAdded.hidden = false;
+}
+
+// --- Receipt import (Scan tab) --------------------------------------------------
+// Paste receipt text → the server parses it offline into grocery line-items → the user
+// reviews (ticking off what to keep) → we merge the checked items into the fridge as a
+// fresh scan. Nothing is written until the user taps "Add to fridge".
+let lastReceipt = { items: [], currency: "₹" };
+
+async function previewReceipt(event) {
+  if (event) event.preventDefault();
+  if (!els.receiptText) return;
+  const text = els.receiptText.value.trim();
+  els.receiptAdded.hidden = true;
+  if (!text) {
+    showReceiptError("Paste the receipt text first.");
+    return;
+  }
+  els.receiptError.hidden = true;
+  els.receiptPreview.disabled = true;
+  els.receiptPreview.textContent = "Reading…";
+  try {
+    const response = await fetch("/api/receipt/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showReceiptError((payload && payload.error) || "Couldn't read that receipt.");
+      return;
+    }
+    renderReceipt(payload || {});
+  } catch (_err) {
+    showReceiptError("Couldn't reach the server to read that receipt.");
+  } finally {
+    els.receiptPreview.disabled = false;
+    els.receiptPreview.textContent = "Preview items";
+  }
+}
+
+function renderReceipt(data) {
+  const items = Array.isArray(data.items) ? data.items : [];
+  const currency = data.currency || "₹";
+  lastReceipt = { items, currency };
+  els.receiptClear.hidden = false;
+
+  if (!items.length) {
+    els.receiptResult.hidden = true;
+    els.receiptList.innerHTML = "";
+    showReceiptError("No grocery items found in that text — try pasting the item lines.");
+    return;
+  }
+
+  els.receiptError.hidden = true;
+  els.receiptResult.hidden = false;
+  els.receiptCount.textContent = String(items.length);
+
+  const known = Number(data.known_count) || items.filter((i) => i.known).length;
+  const totalTxt =
+    Number.isFinite(Number(data.total)) && Number(data.total) > 0
+      ? ` · about ${formatMoney(data.total, currency)}`
+      : "";
+  els.receiptSummary.textContent = `${known} of ${items.length} recognised${totalTxt}.`;
+
+  els.receiptList.innerHTML = "";
+  items.forEach((item, idx) => {
+    els.receiptList.appendChild(buildReceiptRow(item, idx, currency));
+  });
+  updateReceiptImportHint();
+}
+
+function buildReceiptRow(item, idx, currency) {
+  const row = document.createElement("label");
+  row.className = "receipt-row";
+  row.htmlFor = `receipt-item-${idx}`;
+
+  const check = document.createElement("input");
+  check.type = "checkbox";
+  check.className = "receipt-check";
+  check.id = `receipt-item-${idx}`;
+  check.checked = true;
+  check.dataset.idx = String(idx);
+  check.addEventListener("change", updateReceiptImportHint);
+
+  const main = document.createElement("div");
+  main.className = "receipt-main";
+
+  const head = document.createElement("div");
+  head.className = "receipt-head";
+  const name = document.createElement("span");
+  name.className = "receipt-name";
+  name.textContent = item.name || item.token || "Item";
+  head.appendChild(name);
+  const qty = Number(item.qty);
+  if (Number.isFinite(qty) && qty > 1) {
+    const q = document.createElement("span");
+    q.className = "receipt-qty";
+    q.textContent = `×${qty}`;
+    head.appendChild(q);
+  }
+  if (!item.known) {
+    const tag = document.createElement("span");
+    tag.className = "receipt-unsure-tag";
+    tag.textContent = "unsure";
+    head.appendChild(tag);
+  }
+  main.appendChild(head);
+  if (item.raw && item.raw !== item.name) {
+    const raw = document.createElement("p");
+    raw.className = "receipt-raw muted small";
+    raw.textContent = item.raw;
+    main.appendChild(raw);
+  }
+
+  const side = document.createElement("div");
+  side.className = "receipt-side";
+  const price = Number(item.price);
+  if (Number.isFinite(price) && price > 0) {
+    const cost = document.createElement("span");
+    cost.className = "receipt-cost";
+    cost.textContent = formatMoney(price, currency);
+    side.appendChild(cost);
+  }
+
+  row.append(check, main, side);
+  return row;
+}
+
+function checkedReceiptItems() {
+  const boxes = els.receiptList.querySelectorAll(".receipt-check");
+  const picked = [];
+  boxes.forEach((box) => {
+    if (box.checked) {
+      const item = lastReceipt.items[Number(box.dataset.idx)];
+      if (item) picked.push(item);
+    }
+  });
+  return picked;
+}
+
+function updateReceiptImportHint() {
+  const picked = checkedReceiptItems();
+  els.receiptImport.disabled = picked.length === 0;
+  const units = picked.reduce((sum, i) => sum + (Number(i.qty) > 0 ? Number(i.qty) : 1), 0);
+  els.receiptImportHint.textContent = picked.length
+    ? `${picked.length} item${picked.length === 1 ? "" : "s"} · ${units} unit${units === 1 ? "" : "s"}`
+    : "Tick at least one item.";
+}
+
+async function importReceipt() {
+  const picked = checkedReceiptItems();
+  if (!picked.length) return;
+  const items = picked.map((i) => ({ name: i.name, qty: Number(i.qty) > 0 ? Number(i.qty) : 1 }));
+  els.receiptImport.disabled = true;
+  els.receiptImport.textContent = "Adding…";
+  try {
+    const response = await fetch("/api/receipt/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      showReceiptError((payload && payload.error) || "Couldn't add those items.");
+      return;
+    }
+    const added = Number(payload && payload.added) || items.length;
+    const units = Number(payload && payload.units) || 0;
+    els.receiptAdded.textContent = `✓ Added ${added} item${added === 1 ? "" : "s"}${
+      units ? ` (${units} unit${units === 1 ? "" : "s"})` : ""
+    } to your fridge.`;
+    els.receiptAdded.classList.remove("cook-error");
+    els.receiptAdded.hidden = false;
+    // Reset the form; the server broadcast refreshes the fridge, but refresh locally too.
+    clearReceipt();
+    refreshScopes(["inventory", "nutrition"]);
+  } catch (_err) {
+    showReceiptError("Couldn't reach the server to add those items.");
+  } finally {
+    els.receiptImport.disabled = false;
+    els.receiptImport.textContent = "Add to fridge";
+  }
+}
+
+function clearReceipt() {
+  els.receiptText.value = "";
+  els.receiptResult.hidden = true;
+  els.receiptList.innerHTML = "";
+  els.receiptError.hidden = true;
+  els.receiptClear.hidden = true;
+  lastReceipt = { items: [], currency: "₹" };
+}
+
+function showReceiptError(message) {
+  els.receiptError.textContent = message;
+  els.receiptError.hidden = false;
+}
+
+// --- Chef's briefing (proactive, on the My Fridge tab) --------------------------
+async function loadBriefing() {
+  try {
+    const response = await fetch("/api/agent/briefing");
+    if (!response.ok) return; // the banner is a bonus — stay quiet if it can't load
+    const payload = await response.json().catch(() => null);
+    renderBriefing(payload && payload.briefing);
+  } catch (_err) {
+    // ignore: same reason
+  }
+}
+
+function renderBriefing(briefing) {
+  if (!briefing) {
+    els.briefing.hidden = true;
+    delete els.briefing.dataset.id;
+    return;
+  }
+  const body = briefing.body || {};
+  const facts = body.facts || {};
+  const urgent = (facts.discard || []).length || (facts.soon || []).length || facts.cook;
+  const actions = Array.isArray(briefing.actions) ? briefing.actions : [];
+
+  els.briefing.dataset.id = String(briefing.id);
+  els.briefing.classList.toggle("calm", !urgent);
+  els.briefingWhen.textContent = timeAgo(briefing.created_at);
+  els.briefingHeadline.textContent = briefing.headline || "";
+  els.briefingLines.innerHTML = "";
+  for (const line of body.lines || []) {
+    if (line === briefing.headline) continue;
+    const li = document.createElement("li");
+    li.textContent = line;
+    els.briefingLines.appendChild(li);
+  }
+  els.briefingLines.hidden = !els.briefingLines.children.length;
+  els.briefingActions.innerHTML = "";
+  for (const action of actions) els.briefingActions.appendChild(renderActionCard(action));
+  els.briefingActions.hidden = actions.length === 0;
+  els.briefing.hidden = false;
+}
+
+async function checkBriefingNow() {
+  els.briefingError.hidden = true;
+  els.briefingCheck.disabled = true;
+  const original = els.briefingCheck.textContent;
+  els.briefingCheck.textContent = "Checking…";
+  try {
+    const response = await fetch("/api/agent/briefing", { method: "POST" });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      els.briefingError.textContent = (payload && payload.error) || "Chef couldn't check the fridge.";
+      els.briefingError.hidden = false;
+      return;
+    }
+    renderBriefing(payload && payload.briefing);
+  } catch (_err) {
+    els.briefingError.textContent = "Couldn't reach the server.";
+    els.briefingError.hidden = false;
+  } finally {
+    els.briefingCheck.disabled = false;
+    els.briefingCheck.textContent = original;
+  }
+}
+
+async function dismissBriefing() {
+  const id = els.briefing.dataset.id;
+  els.briefing.hidden = true;
+  if (!id) return;
+  try {
+    await fetch(`/api/agent/briefing/${Number(id)}/dismiss`, { method: "POST" });
+  } catch (_err) {
+    // best-effort: it's already hidden, and the next check re-syncs
+  }
+}
+
+// "just now" / "5 min ago" / "3 h ago", else a full local date-time.
+function timeAgo(iso) {
+  const date = new Date(iso);
+  if (!iso || isNaN(date.getTime())) return "";
+  const minutes = Math.round((Date.now() - date.getTime()) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.round(minutes / 60)} h ago`;
+  return formatTimestamp(iso);
 }
 
 // --- UI helpers -------------------------------------------------------------
@@ -2378,31 +3900,50 @@ window.addEventListener("pagehide", () => {
 // and live-refreshes the affected views. Degrades gracefully: if the Socket.IO client
 // didn't load (offline, CDN blocked), the app keeps working with manual refresh as before.
 
-// Map each server "scope" to the client refresh it triggers. A refresh runs only if that
-// tab has been opened (tabsSeen) — except the fridge, the home view, which stays current so
-// it's fresh whenever the user returns. The meal plan is intentionally excluded: re-solving
-// on every change would fight the "rebuild explicitly" design.
+// Map each server "scope" to the client refresh it triggers. A refresh runs only if the
+// relevant view has been opened (destsSeen) — except the fridge, the home view, which stays
+// current so it's fresh whenever the user returns, and shopping, which drives the always-
+// visible Cart badges. The meal plan is intentionally excluded: re-solving on every change
+// would fight the "rebuild explicitly" design.
 const LIVE_SCOPES = {
   inventory: () => {
     loadFridge();
-    if (tabsSeen.has("suggestions")) loadSuggestions();
+    if (destsSeen.has("recipes")) loadSuggestions();
+    if (destsSeen.has("cart")) loadRestock(); // what's on hand changed
   },
   perishables: () => {
-    if (tabsSeen.has("suggestions")) loadPerishables();
+    if (destsSeen.has("recipes")) loadPerishables();
+    if (destsSeen.has("cart")) loadRestock();
   },
   analytics: () => {
-    if (tabsSeen.has("analytics")) loadAnalytics();
+    if (analyticsLoadedOnce) loadAnalytics();
+    if (destsSeen.has("cart")) loadRestock(); // waste log = the restock usage history
   },
   nutrition: () => {
-    if (tabsSeen.has("nutrition")) loadNutrition();
+    if (nutritionLoadedOnce) loadNutrition();
   },
+  // Chef's memory; the shopping list (always refreshed so the Cart badges stay live even
+  // when the Cart view is closed); suggested changes; and the fridge briefing.
+  memory: () => {
+    if (chefLoadedOnce) loadMemory();
+  },
+  shopping: () => {
+    loadShopping();
+    if (destsSeen.has("cart")) loadRestock(); // an item queued to buy drops off the nudge
+  },
+  agent: () => syncActions(), // cheap; keeps Confirm cards on every view (incl. briefing) honest
+  briefing: () => loadBriefing(),
 };
 
+// Only these scopes pop the "Updated live" toast; Chef's bookkeeping (agent, briefing)
+// updates quietly.
 const SCOPE_LABELS = {
   inventory: "Fridge",
   perishables: "Tracked items",
   analytics: "Analytics",
   nutrition: "Nutrition",
+  memory: "Chef's memory",
+  shopping: "Shopping list",
 };
 
 let liveToastTimer = null;
@@ -2439,14 +3980,20 @@ function handleStateChanged(payload) {
     (s) => s in LIVE_SCOPES
   );
   if (!scopes.length) return;
-  for (const scope of scopes) {
+  refreshScopes(scopes);
+  if (scopes.some((s) => s in SCOPE_LABELS)) showLiveToast(scopes);
+}
+
+// Run the client refresh for each scope (also used by hand when there's no live link).
+function refreshScopes(scopes) {
+  for (const scope of new Set(scopes)) {
+    if (!(scope in LIVE_SCOPES)) continue;
     try {
       LIVE_SCOPES[scope]();
     } catch (err) {
       console.error("Live refresh failed for scope", scope, err);
     }
   }
-  showLiveToast(scopes);
 }
 
 function initRealtime() {
@@ -2460,16 +4007,480 @@ function initRealtime() {
     console.warn("Real-time updates unavailable:", err);
     return;
   }
+  liveSocket = socket;
 
   setLiveStatus("connecting", "Connecting…");
   socket.on("connect", () => setLiveStatus("live", "Live"));
   socket.on("disconnect", () => setLiveStatus("offline", "Offline"));
   socket.on("connect_error", () => setLiveStatus("offline", "Offline"));
   socket.on("state_changed", handleStateChanged);
+  socket.on("agent_step", handleAgentStep);
 }
 
-// The Fridge tab is the home view: load the current inventory on startup.
-activateTab("fridge");
+// --- Cook Mode --------------------------------------------------------------
+// A full-screen guided cooking overlay: synthesised steps, a per-step countdown timer,
+// optional spoken steps (Web Speech), ingredient swap ideas from the trained embeddings,
+// and an "I cooked this" button that decrements the fridge through the normal cook path.
+// The heavy lifting is server-side (GET /api/cook/<id> builds the session); this is just
+// presentation + a couple of small browser toys (timer chime, text-to-speech).
 
-// Subscribe to live updates once the initial view is set up.
+const cookEls = {}; // populated in initCookMode()
+const cookState = {
+  session: null,
+  index: 0,
+  voice: false,
+  voiceSupported: typeof window !== "undefined" && "speechSynthesis" in window,
+  saved: false,        // "I cooked this" already recorded (guards double submits)
+  timer: { remaining: 0, total: 0, running: false, handle: null, done: false },
+  lastFocus: null,     // element to restore focus to on close
+};
+
+function initCookMode() {
+  const ids = [
+    "overlay", "sheet", "title", "method", "time", "have", "voice", "close",
+    "ingredient-list", "note", "dots", "step-count", "step-n", "step-title",
+    "step-text", "step-uses", "timer", "timer-display", "timer-toggle",
+    "timer-reset", "prev", "next", "done", "status",
+    "leftovers", "leftovers-form", "leftovers-name", "leftovers-days",
+    "leftovers-save", "leftovers-msg",
+  ];
+  for (const id of ids) cookEls[id] = document.getElementById(`cook-${id}`);
+  if (!cookEls.overlay) return; // markup absent → feature disabled
+
+  cookEls.close.addEventListener("click", closeCookMode);
+  if (cookEls["leftovers-form"]) {
+    cookEls["leftovers-form"].addEventListener("submit", cookSaveLeftovers);
+  }
+  cookEls.overlay.addEventListener("click", (e) => {
+    if (e.target === cookEls.overlay) closeCookMode(); // click the dimmed backdrop
+  });
+  cookEls.prev.addEventListener("click", () => cookGoTo(cookState.index - 1));
+  cookEls.next.addEventListener("click", () => cookGoTo(cookState.index + 1));
+  cookEls.done.addEventListener("click", cookMarkCooked);
+  cookEls.voice.addEventListener("click", cookToggleVoice);
+  cookEls["timer-toggle"].addEventListener("click", cookTimerToggle);
+  cookEls["timer-reset"].addEventListener("click", cookTimerReset);
+
+  if (!cookState.voiceSupported) {
+    cookEls.voice.hidden = true; // no Web Speech in this browser
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (cookEls.overlay.hidden) return;
+    if (e.key === "Escape") { closeCookMode(); return; }
+    if (e.key === "ArrowRight") { cookGoTo(cookState.index + 1); }
+    else if (e.key === "ArrowLeft") { cookGoTo(cookState.index - 1); }
+  });
+}
+
+async function openCookMode(recipeId) {
+  if (!recipeId || !cookEls.overlay) return;
+  cookState.lastFocus = document.activeElement;
+  cookState.saved = false;
+  // Show the shell immediately with a loading title so the tap feels instant.
+  cookEls.title.textContent = "Loading…";
+  cookEls.method.textContent = "";
+  cookEls.time.textContent = "";
+  cookEls.have.textContent = "";
+  cookEls["ingredient-list"].innerHTML = "";
+  cookEls.note.textContent = "";
+  cookEls.status.hidden = true;
+  if (cookEls.leftovers) cookEls.leftovers.hidden = true; // reset the leftovers offer
+  if (cookEls["leftovers-msg"]) cookEls["leftovers-msg"].hidden = true;
+  cookEls.overlay.hidden = false;
+  document.body.style.overflow = "hidden"; // lock background scroll
+  cookEls.close.focus();
+
+  try {
+    const response = await fetch(`/api/cook/${encodeURIComponent(recipeId)}`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload) {
+      cookEls.title.textContent = "Couldn't open Cook Mode";
+      cookEls.note.textContent =
+        (payload && payload.error) || "Please try again in a moment.";
+      return;
+    }
+    cookState.session = payload;
+    cookState.index = 0;
+    renderCookHeader(payload);
+    renderCookIngredients(payload);
+    renderCookStep(0);
+  } catch (_err) {
+    cookEls.title.textContent = "Couldn't open Cook Mode";
+    cookEls.note.textContent = "Couldn't reach the server. Check your connection.";
+  }
+}
+
+function closeCookMode() {
+  if (!cookEls.overlay) return;
+  cookTimerStop();
+  cookStopSpeech();
+  cookEls.overlay.hidden = true;
+  document.body.style.overflow = "";
+  if (cookState.lastFocus && typeof cookState.lastFocus.focus === "function") {
+    cookState.lastFocus.focus();
+  }
+}
+
+function renderCookHeader(session) {
+  cookEls.title.textContent = session.title || "Cook Mode";
+  cookEls.method.textContent = (session.method || "recipe").replace(/_/g, " ");
+  cookEls.time.textContent = Number.isFinite(session.time_min)
+    ? `⏱ ${session.time_min} min`
+    : "";
+  const have = Number.isFinite(session.have_count) ? session.have_count : 0;
+  const total = Number.isFinite(session.total_count) ? session.total_count : 0;
+  cookEls.have.textContent = total ? `🧺 ${have}/${total} on hand` : "";
+}
+
+function renderCookIngredients(session) {
+  const list = cookEls["ingredient-list"];
+  list.innerHTML = "";
+  const ingredients = Array.isArray(session.ingredients) ? session.ingredients : [];
+  for (const ing of ingredients) {
+    const item = document.createElement("div");
+    const stateClass = ing.have ? "have" : ing.pantry ? "pantry" : "missing";
+    item.className = `cook-ing ${stateClass}`;
+
+    const head = document.createElement("div");
+    head.className = "cook-ing-head";
+    const check = document.createElement("span");
+    check.className = "cook-ing-check";
+    check.textContent = ing.have ? "✓" : ing.pantry ? "•" : "+";
+    check.setAttribute("aria-hidden", "true");
+    const name = document.createElement("span");
+    name.className = "cook-ing-name";
+    name.textContent = ing.name || ing.token || "";
+    const tag = document.createElement("span");
+    tag.className = "cook-ing-tag";
+    tag.textContent = ing.have ? "Have" : ing.pantry ? "Pantry" : "Need";
+    head.append(check, name, tag);
+    item.appendChild(head);
+
+    // Swap ideas: only for things you don't have (and aren't basic pantry staples).
+    const subs = Array.isArray(ing.substitutes) ? ing.substitutes : [];
+    if (!ing.have && !ing.pantry && subs.length) {
+      const swaps = document.createElement("div");
+      swaps.className = "cook-swaps";
+      const label = document.createElement("span");
+      label.className = "cook-swaps-label";
+      label.textContent = "Swap:";
+      swaps.appendChild(label);
+      for (const s of subs) {
+        const chip = document.createElement("span");
+        chip.className = "cook-swap-chip";
+        chip.textContent = s.name || s.token || "";
+        swaps.appendChild(chip);
+      }
+      item.appendChild(swaps);
+    }
+    list.appendChild(item);
+  }
+
+  cookEls.note.textContent = session.note || "";
+  cookEls.note.hidden = !session.note;
+}
+
+function renderCookStep(index) {
+  const session = cookState.session;
+  if (!session || !Array.isArray(session.steps) || !session.steps.length) return;
+  const steps = session.steps;
+  const i = Math.max(0, Math.min(index, steps.length - 1));
+  cookState.index = i;
+  const step = steps[i];
+
+  cookEls["step-n"].textContent = String(step.n || i + 1);
+  cookEls["step-title"].textContent = step.title || `Step ${i + 1}`;
+  cookEls["step-text"].textContent = step.text || "";
+  // Re-trigger the slide-in animation on each step change.
+  const card = cookEls["step-title"].closest(".cook-step-card");
+  if (card) { card.style.animation = "none"; void card.offsetWidth; card.style.animation = ""; }
+
+  // "Uses" chips for this step.
+  const uses = cookEls["step-uses"];
+  uses.innerHTML = "";
+  const stepUses = Array.isArray(step.uses) ? step.uses : [];
+  for (const u of stepUses) {
+    const chip = document.createElement("span");
+    chip.className = "cook-use-chip";
+    chip.textContent = u;
+    uses.appendChild(chip);
+  }
+
+  // Progress dots + counter.
+  renderCookDots(i, steps.length);
+  cookEls["step-count"].textContent = `Step ${i + 1} of ${steps.length}`;
+
+  // Timer for this step (only if it has a duration).
+  cookTimerStop();
+  const secs = Number.isFinite(step.seconds) ? step.seconds : 0;
+  if (secs > 0) {
+    cookEls.timer.hidden = false;
+    cookTimerSet(secs);
+  } else {
+    cookEls.timer.hidden = true;
+  }
+
+  // Nav buttons: Back disabled on first; Next vs "I cooked this" on last.
+  cookEls.prev.disabled = i === 0;
+  const onLast = i === steps.length - 1;
+  cookEls.next.hidden = onLast;
+  cookEls.done.hidden = !onLast || cookState.saved;
+
+  // Read the step aloud if voice is on.
+  cookSpeak(`${step.title}. ${step.text}`);
+}
+
+function renderCookDots(active, total) {
+  const dots = cookEls.dots;
+  dots.innerHTML = "";
+  for (let i = 0; i < total; i++) {
+    const dot = document.createElement("span");
+    dot.className = "cook-dot" + (i === active ? " active" : i < active ? " done" : "");
+    dots.appendChild(dot);
+  }
+}
+
+function cookGoTo(index) {
+  const session = cookState.session;
+  if (!session || !Array.isArray(session.steps)) return;
+  if (index < 0 || index >= session.steps.length) return;
+  renderCookStep(index);
+}
+
+// --- Per-step countdown timer ------------------------------------------------
+
+function cookFormatTime(total) {
+  const s = Math.max(0, Math.round(total));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
+
+function cookTimerSet(seconds) {
+  cookState.timer.total = seconds;
+  cookState.timer.remaining = seconds;
+  cookState.timer.running = false;
+  cookState.timer.done = false;
+  cookEls["timer-display"].textContent = cookFormatTime(seconds);
+  cookEls["timer-display"].classList.remove("running", "done");
+  cookEls["timer-toggle"].textContent = "Start timer";
+  cookEls["timer-toggle"].disabled = false;
+}
+
+function cookTimerToggle() {
+  if (cookState.timer.done) { cookTimerReset(); return; }
+  if (cookState.timer.running) {
+    cookTimerStop();
+    cookEls["timer-toggle"].textContent = "Resume";
+  } else {
+    cookTimerStart();
+  }
+}
+
+function cookTimerStart() {
+  const t = cookState.timer;
+  if (t.remaining <= 0) return;
+  t.running = true;
+  cookEls["timer-toggle"].textContent = "Pause";
+  cookEls["timer-display"].classList.add("running");
+  const started = Date.now();
+  let base = t.remaining;
+  t.handle = setInterval(() => {
+    const elapsed = (Date.now() - started) / 1000;
+    t.remaining = Math.max(0, base - elapsed);
+    cookEls["timer-display"].textContent = cookFormatTime(t.remaining);
+    if (t.remaining <= 0) {
+      cookTimerStop();
+      t.done = true;
+      cookEls["timer-display"].classList.remove("running");
+      cookEls["timer-display"].classList.add("done");
+      cookEls["timer-toggle"].textContent = "Restart";
+      cookChime();
+      cookSpeak("Time's up.");
+    }
+  }, 250);
+}
+
+function cookTimerStop() {
+  const t = cookState.timer;
+  if (t.handle) { clearInterval(t.handle); t.handle = null; }
+  t.running = false;
+  if (cookEls["timer-display"]) cookEls["timer-display"].classList.remove("running");
+}
+
+function cookTimerReset() {
+  cookTimerStop();
+  cookTimerSet(cookState.timer.total);
+}
+
+// A short two-note chime via Web Audio (no asset file needed). Silently no-ops if the
+// browser blocks audio (e.g. no prior user gesture).
+function cookChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const now = ctx.currentTime;
+    [880, 1174.66].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const t = now + i * 0.18;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(0.28, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.4);
+    });
+    setTimeout(() => { ctx.close().catch(() => {}); }, 1200);
+  } catch (_e) { /* audio unavailable */ }
+}
+
+// --- Voice (Web Speech) ------------------------------------------------------
+
+function cookToggleVoice() {
+  if (!cookState.voiceSupported) return;
+  cookState.voice = !cookState.voice;
+  cookEls.voice.setAttribute("aria-pressed", String(cookState.voice));
+  cookEls.voice.textContent = cookState.voice ? "🔊 Voice on" : "🔊 Voice off";
+  if (cookState.voice) {
+    const step = cookState.session && cookState.session.steps[cookState.index];
+    if (step) cookSpeak(`${step.title}. ${step.text}`);
+  } else {
+    cookStopSpeech();
+  }
+}
+
+function cookSpeak(text) {
+  if (!cookState.voice || !cookState.voiceSupported || !text) return;
+  try {
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(String(text));
+    u.rate = 0.98;
+    u.pitch = 1.0;
+    synth.speak(u);
+  } catch (_e) { /* speech unavailable */ }
+}
+
+function cookStopSpeech() {
+  try {
+    if (cookState.voiceSupported) window.speechSynthesis.cancel();
+  } catch (_e) { /* ignore */ }
+}
+
+// --- "I cooked this" → decrement the fridge through the normal cook path ------
+
+async function cookMarkCooked() {
+  const session = cookState.session;
+  if (!session || cookState.saved) return;
+  // Use exactly what you actually have on hand (skip pantry staples and missing items),
+  // by their pretty names — the server normalises them back to canonical tokens.
+  const uses = (session.ingredients || [])
+    .filter((i) => i.have && !i.pantry)
+    .map((i) => i.name)
+    .filter(Boolean);
+
+  cookEls.done.disabled = true;
+  cookEls.status.hidden = false;
+  cookEls.status.textContent = "Saving…";
+  try {
+    const response = await fetch("/api/cook", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uses, title: session.title || "" }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      cookEls.status.textContent =
+        (payload && payload.error) || "Couldn't record that meal.";
+      cookEls.done.disabled = false;
+      return;
+    }
+    cookState.saved = true;
+    cookEls.done.hidden = true;
+    const n = uses.length;
+    cookEls.status.textContent = n
+      ? `✓ Enjoy! Removed ${n} ingredient${n === 1 ? "" : "s"} from your fridge.`
+      : "✓ Enjoy your meal!";
+    // Refresh the fridge/analytics/perishables locally too (the server also broadcasts).
+    refreshScopes(["inventory", "analytics", "perishables"]);
+    // Offer to track leftovers instead of closing immediately — a real kitchen makes extra.
+    showCookLeftovers(session.title || "");
+  } catch (_err) {
+    cookEls.status.textContent = "Couldn't reach the server to save that.";
+    cookEls.done.disabled = false;
+  }
+}
+
+// --- Leftovers: track what you made extra of so it doesn't get forgotten -------
+
+function showCookLeftovers(title) {
+  if (!cookEls.leftovers) return;
+  const name = String(title || "").trim();
+  cookEls["leftovers-name"].value = name ? `Leftover ${name}` : "";
+  cookEls["leftovers-days"].value = "3";
+  cookEls["leftovers-msg"].hidden = true;
+  cookEls["leftovers-save"].disabled = false;
+  cookEls["leftovers-save"].textContent = "Save leftovers";
+  cookEls.leftovers.hidden = false;
+}
+
+async function cookSaveLeftovers(event) {
+  if (event) event.preventDefault();
+  const name = cookEls["leftovers-name"].value.trim();
+  const days = Number(cookEls["leftovers-days"].value) || 3;
+  if (!name) {
+    cookEls["leftovers-msg"].textContent = "Give the leftovers a name first.";
+    cookEls["leftovers-msg"].classList.add("cook-error");
+    cookEls["leftovers-msg"].hidden = false;
+    return;
+  }
+  cookEls["leftovers-save"].disabled = true;
+  cookEls["leftovers-save"].textContent = "Saving…";
+  try {
+    const response = await fetch("/api/leftovers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, days }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      cookEls["leftovers-msg"].textContent =
+        (payload && payload.error) || "Couldn't save those leftovers.";
+      cookEls["leftovers-msg"].classList.add("cook-error");
+      cookEls["leftovers-msg"].hidden = false;
+      cookEls["leftovers-save"].disabled = false;
+      cookEls["leftovers-save"].textContent = "Save leftovers";
+      return;
+    }
+    const useBy = (payload && payload.perishable && payload.perishable.use_by) || "";
+    cookEls["leftovers-msg"].classList.remove("cook-error");
+    cookEls["leftovers-msg"].textContent = useBy
+      ? `✓ Tracked — use by ${useBy}. It'll show up under Tracked items.`
+      : "✓ Leftovers tracked.";
+    cookEls["leftovers-msg"].hidden = false;
+    cookEls["leftovers-save"].textContent = "Saved ✓";
+    refreshScopes(["perishables"]);
+  } catch (_err) {
+    cookEls["leftovers-msg"].textContent = "Couldn't reach the server to save those.";
+    cookEls["leftovers-msg"].classList.add("cook-error");
+    cookEls["leftovers-msg"].hidden = false;
+    cookEls["leftovers-save"].disabled = false;
+    cookEls["leftovers-save"].textContent = "Save leftovers";
+  }
+}
+
+// --- Startup ----------------------------------------------------------------
+// Restore the saved theme, start the ambient frost, and prime the shopping list so the
+// Cart badges are live from the first paint. Fridge is the home view: it loads the current
+// inventory (and Chef's briefing). Then subscribe to live updates.
+initTheme();
+initFrost();
+initCookMode();
+loadShopping();
+activateDest("fridge");
 initRealtime();
